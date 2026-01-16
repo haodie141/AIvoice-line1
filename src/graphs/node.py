@@ -229,7 +229,13 @@ def speaking_practice_node(
 3. 提供改进建议
 4. 提出一个相关的问题引导继续对话
 
-请用友好、鼓励的语气回复，适合{state.child_age}岁的孩子理解。"""
+请用友好、鼓励的语气回复，适合{state.child_age}岁的孩子理解。
+
+重要提醒：
+- 只输出对话内容，不要包含任何动作描述（如：（微笑）、（点头）、（鼓掌）等）
+- 不要包含括号内的任何文字
+- 不要使用表情符号
+- 直接用文字表达你的鼓励和指导"""
     
     messages = [
         HumanMessage(content=feedback_prompt)
