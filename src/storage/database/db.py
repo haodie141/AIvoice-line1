@@ -19,8 +19,8 @@ def get_db_url() -> str:
     url = os.getenv("PGDATABASE_URL") or ""
     if url is not None and url != "":
         return url
-    from coze_workload_identity import Client
     try:
+        from coze_workload_identity import Client
         client = Client()
         env_vars = client.get_project_env_vars()
         client.close()
@@ -29,11 +29,10 @@ def get_db_url() -> str:
                 url = env_var.value.replace("'", "'\\''")
                 return url
     except Exception as e:
-        logger.error(f"Error loading PGDATABASE_URL: {e}")
-        raise e
+        logger.warning(f"Error loading PGDATABASE_URL: {e}")
     finally:
         if url is None or url == "":
-            logger.error("PGDATABASE_URL is not set")
+            logger.info("PGDATABASE_URL is not set, database features will be disabled")
     return url
 _engine = None
 _SessionLocal = None
@@ -41,8 +40,8 @@ _SessionLocal = None
 def _create_engine_with_retry():
     url = get_db_url()
     if url is None or url == "":
-        logger.error("PGDATABASE_URL is not set")
-        raise ValueError("PGDATABASE_URL is not set")
+        logger.info("PGDATABASE_URL is not set, database engine will not be created")
+        return None
     size = 100
     overflow = 100
     recycle = 1800
@@ -69,7 +68,7 @@ def _create_engine_with_retry():
             logger.warning(f"Database connection failed, retrying... (elapsed: {elapsed:.1f}s)")
             time.sleep(min(1, MAX_RETRY_TIME - elapsed))
     logger.error(f"Database connection failed after {MAX_RETRY_TIME}s: {last_error}")
-    raise last_error  # pyright: ignore [reportGeneralTypeIssues]
+    return None
 
 def get_engine():
     global _engine
