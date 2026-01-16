@@ -78,35 +78,51 @@ def homework_check_node(
 ) -> HomeworkCheckOutput:
     """
     title: 作业检查与提醒
-    desc: 检查作业完成状态，生成提醒消息
+    desc: 检查作业完成状态，基于时间有效性过滤过期作业，生成提醒消息
     """
     ctx = runtime.context
     
-    homework_status = "未开始"
+    homework_status = "无作业"
     need_remind = False
     remind_message = ""
     
-    # 分析作业列表
-    if state.homework_list:
-        # 检查是否有未完成的作业
-        incomplete_homework = [h for h in state.homework_list if h.get("completed", False) == False]
+    # 使用MemoryStore获取有效的作业（自动过滤过期和已完成的作业）
+    from graphs.memory_store import MemoryStore
+    memory_store = MemoryStore.get_instance()
+    
+    # 获取有效的作业列表
+    valid_homework = memory_store.get_valid_homework(state.child_id)
+    
+    if valid_homework:
+        homework_status = "未开始"
+        need_remind = True
         
-        if not incomplete_homework:
-            homework_status = "已完成"
-        elif len(incomplete_homework) == len(state.homework_list):
-            homework_status = "未开始"
-            need_remind = True
-        else:
-            homework_status = "进行中"
-            need_remind = True
+        # 生成提醒消息（包含截止时间信息）
+        subjects_with_deadline = []
+        for hw in valid_homework:
+            subject = hw.get("subject", "未知")
+            deadline_str = hw.get("deadline", "")
+            
+            if deadline_str:
+                try:
+                    deadline = datetime.fromisoformat(deadline_str)
+                    now = datetime.now()
+                    hours_left = (deadline - now).total_seconds() / 3600
+                    
+                    if hours_left < 24:
+                        subjects_with_deadline.append(f"{subject}（剩余{int(hours_left)}小时）")
+                    else:
+                        days_left = int(hours_left / 24)
+                        subjects_with_deadline.append(f"{subject}（剩余{days_left}天）")
+                except (ValueError, TypeError):
+                    subjects_with_deadline.append(subject)
+            else:
+                subjects_with_deadline.append(subject)
         
-        # 生成提醒消息
-        if need_remind:
-            subjects = [h.get("subject", "") for h in incomplete_homework]
-            remind_message = f"宝贝，你还有{len(incomplete_homework)}项作业没完成哦：{', '.join(subjects)}。要不要现在开始做作业呢？"
+        remind_message = f"宝贝，你还有{len(valid_homework)}项作业需要完成哦：{', '.join(subjects_with_deadline)}。要不要现在开始做作业呢？"
     else:
         homework_status = "无作业"
-        remind_message = "今天没有作业，真棒！可以尽情玩耍啦～"
+        remind_message = "今天没有需要完成的作业，真棒！可以尽情玩耍啦～"
     
     return HomeworkCheckOutput(
         homework_status=homework_status,
@@ -275,7 +291,7 @@ def realtime_conversation_node(
 ) -> RealtimeConversationOutput:
     """
     title: 实时对话
-    desc: 与孩子进行实时对话，回应孩子的问题和需求
+    desc: 与孩子进行实时对话，回应孩子的问题和需求（支持时间感知的上下文）
     integrations: 大语言模型
     """
     ctx = runtime.context
@@ -296,12 +312,20 @@ def realtime_conversation_node(
         "child_age": state.child_age
     })
     
-    # 渲染用户提示词
+    # 获取当前时间信息
+    current_time = datetime.now()
+    time_of_day = "早上" if current_time.hour < 12 else "下午" if current_time.hour < 18 else "晚上"
+    current_date = current_time.strftime("%Y年%m月%d日")
+    
+    # 渲染用户提示词（包含时间信息）
     up_tpl = Template(up)
     user_prompt = up_tpl.render({
         "user_input": state.user_input_text,
         "context_info": state.context_info,
-        "conversation_history": state.conversation_history[-3:] if state.conversation_history else []
+        "conversation_history": state.conversation_history[-3:] if state.conversation_history else [],
+        "current_time": current_time.strftime("%H:%M"),
+        "time_of_day": time_of_day,
+        "current_date": current_date
     })
     
     # 初始化LLM客户端

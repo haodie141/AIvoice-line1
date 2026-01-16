@@ -4,20 +4,20 @@ from utils.file.file import File
 
 # ============== 全局状态定义 ==============
 class GlobalState(BaseModel):
-    """AI陪伴孩子工作流的全局状态"""
+    """AI陪伴孩子工作流的全局状态（支持时间感知）"""
     # 孩子基本信息
     child_id: str = Field(..., description="孩子ID")
     child_name: str = Field(..., description="孩子姓名")
     child_age: int = Field(..., description="孩子年龄")
     child_interests: List[str] = Field(default=[], description="孩子兴趣爱好")
     
-    # 作业信息
-    homework_list: List[dict] = Field(default=[], description="作业列表")
-    homework_status: str = Field(default="", description="作业状态：未开始/进行中/已完成")
+    # 作业信息（支持时间有效性判断）
+    homework_list: List[dict] = Field(default=[], description="作业列表（每个作业包含创建时间、截止时间等）")
+    homework_status: str = Field(default="", description="作业状态：未开始/进行中/已完成/无作业")
     need_remind: bool = Field(default=False, description="是否需要提醒")
     
-    # 长期记忆
-    conversation_history: List[dict] = Field(default=[], description="对话历史记录")
+    # 长期记忆（支持时间维度的数据管理）
+    conversation_history: List[dict] = Field(default=[], description="对话历史记录（每条包含时间戳）")
     learning_progress: dict = Field(default={}, description="学习进度记录")
     speaking_practice_count: int = Field(default=0, description="口语练习次数")
     
@@ -34,7 +34,7 @@ class GlobalState(BaseModel):
     trigger_type: str = Field(default="", description="触发类型：conversation/practice/care/remind")
     
     # 时间信息
-    current_time: str = Field(default="", description="当前时间")
+    current_time: str = Field(default="", description="当前时间（ISO格式）")
 
 # ============== 图的输入输出 ==============
 class GraphInput(BaseModel):
