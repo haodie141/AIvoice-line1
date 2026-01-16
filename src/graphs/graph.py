@@ -129,22 +129,92 @@ def wrap_realtime_conversation(
     config: RunnableConfig, 
     runtime: Runtime[Context]
 ) -> RealtimeConversationWrapOutput:
-    """实时对话"""
+    """实时对话（支持作业状态自动更新）"""
+    import json
+    from graphs.memory_store import MemoryStore
+    from langchain_core.messages import HumanMessage, SystemMessage
+    
     # 如果有音频但没有文本，先识别
     user_text = state.user_input_text
     from graphs.node import realtime_conversation_node
-    from coze_coding_dev_sdk import ASRClient
+    from coze_coding_dev_sdk import ASRClient, LLMClient
+    
+    # 获取有效作业信息，用于AI判断作业完成情况
+    memory_store = MemoryStore.get_instance()
+    valid_homework = memory_store.get_valid_homework(state.child_id)
+    homework_info = ""
+    if valid_homework:
+        subjects = [hw.get("subject", "") for hw in valid_homework]
+        homework_info = f"未完成作业：{', '.join(subjects)}"
+    else:
+        homework_info = "所有作业已完成"
     
     node_input = RealtimeConversationInput(
         user_input_text=user_text,
         child_name=state.child_name,
         child_age=state.child_age,
         conversation_history=state.conversation_history,
-        context_info=f"作业状态：{state.homework_status}"
+        context_info=f"作业状态：{state.homework_status}，{homework_info}"
     )
     node_output: RealtimeConversationOutput = realtime_conversation_node(node_input, config, runtime)
     
-    return RealtimeConversationWrapOutput(ai_response=node_output.ai_response)
+    ai_response_text = node_output.ai_response
+    
+    # 使用第二个LLM调用来判断是否提到了作业完成
+    # 这样更可靠，不依赖主对话LLM的格式输出
+    if valid_homework:
+        subjects_str = "、".join([hw.get("subject", "") for hw in valid_homework])
+        
+        # 使用LLM判断对话中是否提到作业完成
+        judgment_prompt = f"""你是一个作业状态识别助手。请分析以下对话，判断孩子是否确认完成了某个作业。
+
+孩子的年龄：{state.child_age}岁
+孩子说：{user_text}
+AI回复：{ai_response_text}
+
+未完成的作业列表：{subjects_str}
+
+请判断：
+1. 孩子是否明确表示完成了某个作业？
+2. 如果完成了，是哪个学科的作业？
+
+只返回JSON格式，不要其他文字：
+{{"homework_completed": true/false, "subject": "学科名称或空字符串", "confirmed": true/false}}
+
+规则：
+- homework_completed: 如果孩子明确说"做完了"、"完成了"等，设为true，否则false
+- subject: 提取学科名称（如"数学"、"语文"、"英语"），如果不确定则为空字符串
+- confirmed: 如果孩子确认完成（如"是的"、"真的做完了"等），设为true，否则false"""
+        
+        try:
+            client = LLMClient(ctx=runtime.context)
+            messages = [HumanMessage(content=judgment_prompt)]
+            response = client.invoke(messages=messages, model="doubao-seed-1-8-251228", temperature=0.3)
+            
+            # 解析LLM的判断结果
+            judgment_text = str(response.content).strip()
+            # 提取JSON部分
+            if "{" in judgment_text and "}" in judgment_text:
+                json_start = judgment_text.find("{")
+                json_end = judgment_text.rfind("}") + 1
+                json_str = judgment_text[json_start:json_end]
+                
+                homework_completed_info = json.loads(json_str)
+                
+                # 如果确认作业完成，更新作业状态
+                if homework_completed_info.get("homework_completed", False) and homework_completed_info.get("confirmed", False):
+                    subject = homework_completed_info.get("subject", "")
+                    if subject:
+                        # 查找匹配的作业并标记为完成
+                        for hw in valid_homework:
+                            if subject in hw.get("subject", ""):
+                                memory_store.complete_homework(state.child_id, hw["id"])
+                                print(f"✅ 自动更新作业状态：{subject} 作业标记为已完成")
+                                break
+        except Exception as e:
+            print(f"⚠️  作业完成判断失败: {e}")
+    
+    return RealtimeConversationWrapOutput(ai_response=ai_response_text)
 
 
 def wrap_voice_synthesis(

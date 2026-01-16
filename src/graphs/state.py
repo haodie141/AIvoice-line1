@@ -217,6 +217,7 @@ class SpeakingPracticeWrapOutput(BaseModel):
 
 class RealtimeConversationWrapInput(BaseModel):
     """实时对话包装节点输入"""
+    child_id: str = Field(..., description="孩子ID")
     user_input_text: str = Field(..., description="用户输入文本")
     child_name: str = Field(..., description="孩子姓名")
     child_age: int = Field(..., description="孩子年龄")
