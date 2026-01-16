@@ -1,0 +1,381 @@
+import os
+import json
+from datetime import datetime
+from typing import Optional, Dict, Any
+from jinja2 import Template
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.runtime import Runtime
+from coze_coding_utils.runtime_ctx.context import Context
+from coze_coding_dev_sdk import LLMClient, ASRClient, TTSClient
+import requests
+
+from graphs.state import (
+    LongTermMemoryInput, LongTermMemoryOutput,
+    HomeworkCheckInput, HomeworkCheckOutput,
+    ActiveCareInput, ActiveCareOutput,
+    SpeakingPracticeInput, SpeakingPracticeOutput,
+    RealtimeConversationInput, RealtimeConversationOutput,
+    VoiceSynthesisInput, VoiceSynthesisOutput,
+    RouteDecisionInput
+)
+
+
+# ============== 节点1：长期记忆节点（内存方式） ==============
+def long_term_memory_node(
+    state: LongTermMemoryInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> LongTermMemoryOutput:
+    """
+    title: 长期记忆管理
+    desc: 使用内存方式管理孩子的对话历史和学习进度记录
+    """
+    ctx = runtime.context
+    
+    # 使用内存存储管理孩子的对话历史和学习进度
+    from graphs.memory_store import MemoryStore
+    
+    memory_store = MemoryStore.get_instance()
+    
+    if state.action_type == "load":
+        # 加载数据
+        conversation_history = memory_store.get_conversation_history(state.child_id)
+        learning_progress = memory_store.get_learning_progress(state.child_id)
+        speaking_practice_count = memory_store.get_speaking_practice_count(state.child_id)
+        
+        return LongTermMemoryOutput(
+            conversation_history=conversation_history,
+            learning_progress=learning_progress,
+            speaking_practice_count=speaking_practice_count,
+            load_success=True,
+            save_success=False
+        )
+    
+    elif state.action_type == "save":
+        # 保存数据
+        if state.conversation_record:
+            memory_store.add_conversation(state.child_id, state.conversation_record)
+        if state.learning_progress:
+            memory_store.update_learning_progress(state.child_id, state.learning_progress)
+        
+        return LongTermMemoryOutput(
+            load_success=False,
+            save_success=True
+        )
+    
+    return LongTermMemoryOutput(
+        load_success=False,
+        save_success=False
+    )
+
+
+# ============== 节点2：作业检查节点 ==============
+def homework_check_node(
+    state: HomeworkCheckInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> HomeworkCheckOutput:
+    """
+    title: 作业检查与提醒
+    desc: 检查作业完成状态，生成提醒消息
+    """
+    ctx = runtime.context
+    
+    homework_status = "未开始"
+    need_remind = False
+    remind_message = ""
+    
+    # 分析作业列表
+    if state.homework_list:
+        # 检查是否有未完成的作业
+        incomplete_homework = [h for h in state.homework_list if h.get("completed", False) == False]
+        
+        if not incomplete_homework:
+            homework_status = "已完成"
+        elif len(incomplete_homework) == len(state.homework_list):
+            homework_status = "未开始"
+            need_remind = True
+        else:
+            homework_status = "进行中"
+            need_remind = True
+        
+        # 生成提醒消息
+        if need_remind:
+            subjects = [h.get("subject", "") for h in incomplete_homework]
+            remind_message = f"宝贝，你还有{len(incomplete_homework)}项作业没完成哦：{', '.join(subjects)}。要不要现在开始做作业呢？"
+    else:
+        homework_status = "无作业"
+        remind_message = "今天没有作业，真棒！可以尽情玩耍啦～"
+    
+    return HomeworkCheckOutput(
+        homework_status=homework_status,
+        need_remind=need_remind,
+        remind_message=remind_message
+    )
+
+
+# ============== 节点3：主动关心节点（Agent节点） ==============
+def active_care_node(
+    state: ActiveCareInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> ActiveCareOutput:
+    """
+    title: 主动关心
+    desc: 基于孩子的状态和历史对话，主动发起关心的对话
+    integrations: 大语言模型
+    """
+    ctx = runtime.context
+    
+    # 读取配置文件
+    cfg_file = os.path.join(os.getenv("COZE_WORKSPACE_PATH"), config['metadata']['llm_cfg'])
+    with open(cfg_file, 'r') as fd:
+        _cfg = json.load(fd)
+    
+    llm_config = _cfg.get("config", {})
+    sp = _cfg.get("sp", "")
+    up = _cfg.get("up", "")
+    
+    # 使用jinja2模板渲染提示词
+    sp_tpl = Template(sp)
+    up_tpl = Template(up)
+    
+    system_prompt = sp_tpl.render({
+        "child_name": state.child_name,
+        "child_age": state.child_age,
+        "interests": ", ".join(state.child_interests)
+    })
+    
+    user_prompt = up_tpl.render({
+        "current_time": state.current_time,
+        "conversation_history": state.conversation_history[-3:] if state.conversation_history else [],
+        "interests": ", ".join(state.child_interests)
+    })
+    
+    # 初始化LLM客户端
+    client = LLMClient(ctx=ctx)
+    
+    # 构建消息
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt)
+    ]
+    
+    # 调用大模型
+    response = client.invoke(
+        messages=messages,
+        model=llm_config.get("model", "doubao-seed-1-8-251228"),
+        temperature=llm_config.get("temperature", 0.8)
+    )
+    
+    # 提取响应文本
+    if isinstance(response.content, str):
+        care_message = response.content
+    else:
+        care_message = str(response.content)
+    
+    return ActiveCareOutput(care_message=care_message.strip())
+
+
+# ============== 节点4：口语练习节点 ==============
+def speaking_practice_node(
+    state: SpeakingPracticeInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> SpeakingPracticeOutput:
+    """
+    title: 口语练习
+    desc: 语音识别、纠正和反馈，帮助孩子练习口语
+    integrations: 语音大模型, 大语言模型
+    """
+    ctx = runtime.context
+    
+    recognized_text = state.user_input_text
+    
+    # 如果有音频输入，进行语音识别
+    if state.user_input_audio and not recognized_text:
+        asr_client = ASRClient(ctx=ctx)
+        
+        try:
+            # 使用URL进行语音识别
+            text, data = asr_client.recognize(
+                uid=f"{state.child_name}_practice",
+                url=state.user_input_audio.url
+            )
+            recognized_text = text
+        except Exception as e:
+            recognized_text = state.user_input_text  # 降级到使用文本输入
+    
+    # 构建学习进度信息
+    practice_count = 0
+    from graphs.memory_store import MemoryStore
+    memory_store = MemoryStore.get_instance()
+    learning_progress = memory_store.get_learning_progress(state.child_name)
+    
+    if learning_progress and "speaking_practice_count" in learning_progress:
+        practice_count = learning_progress["speaking_practice_count"]
+    
+    # 使用大模型进行语音纠正和反馈
+    client = LLMClient(ctx=ctx)
+    
+    feedback_prompt = f"""孩子的姓名：{state.child_name}，年龄：{state.child_age}岁
+孩子刚才说：{recognized_text}
+已练习次数：{practice_count}
+
+请对孩子的口语表达进行评价和指导：
+1. 纠正发音或语法错误（如果有）
+2. 给予鼓励和肯定
+3. 提供改进建议
+4. 提出一个相关的问题引导继续对话
+
+请用友好、鼓励的语气回复，适合{state.child_age}岁的孩子理解。"""
+    
+    messages = [
+        HumanMessage(content=feedback_prompt)
+    ]
+    
+    response = client.invoke(
+        messages=messages,
+        model="doubao-seed-1-8-251228",
+        temperature=0.8
+    )
+    
+    if isinstance(response.content, str):
+        feedback = response.content
+    else:
+        feedback = str(response.content)
+    
+    # 更新练习次数
+    new_practice_count = practice_count + 1
+    memory_store.update_learning_progress(state.child_name, {
+        "speaking_practice_count": new_practice_count,
+        "last_practice_time": datetime.now().isoformat()
+    })
+    
+    return SpeakingPracticeOutput(
+        recognized_text=recognized_text,
+        corrected_text=recognized_text,  # LLM会自动在反馈中纠正
+        feedback=feedback.strip(),
+        practice_count=new_practice_count
+    )
+
+
+# ============== 节点5：实时对话节点（Agent节点） ==============
+def realtime_conversation_node(
+    state: RealtimeConversationInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> RealtimeConversationOutput:
+    """
+    title: 实时对话
+    desc: 与孩子进行实时对话，回应孩子的问题和需求
+    integrations: 大语言模型
+    """
+    ctx = runtime.context
+    
+    # 读取配置文件
+    cfg_file = os.path.join(os.getenv("COZE_WORKSPACE_PATH"), config['metadata']['llm_cfg'])
+    with open(cfg_file, 'r') as fd:
+        _cfg = json.load(fd)
+    
+    llm_config = _cfg.get("config", {})
+    sp = _cfg.get("sp", "")
+    up = _cfg.get("up", "")
+    
+    # 渲染系统提示词
+    sp_tpl = Template(sp)
+    system_prompt = sp_tpl.render({
+        "child_name": state.child_name,
+        "child_age": state.child_age
+    })
+    
+    # 渲染用户提示词
+    up_tpl = Template(up)
+    user_prompt = up_tpl.render({
+        "user_input": state.user_input_text,
+        "context_info": state.context_info,
+        "conversation_history": state.conversation_history[-3:] if state.conversation_history else []
+    })
+    
+    # 初始化LLM客户端
+    client = LLMClient(ctx=ctx)
+    
+    # 构建消息
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt)
+    ]
+    
+    # 调用大模型
+    response = client.invoke(
+        messages=messages,
+        model=llm_config.get("model", "doubao-seed-1-8-251228"),
+        temperature=llm_config.get("temperature", 0.8)
+    )
+    
+    # 提取响应文本
+    if isinstance(response.content, str):
+        ai_response = response.content
+    else:
+        ai_response = str(response.content)
+    
+    return RealtimeConversationOutput(ai_response=ai_response.strip())
+
+
+# ============== 节点6：语音合成节点 ==============
+def voice_synthesis_node(
+    state: VoiceSynthesisInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> VoiceSynthesisOutput:
+    """
+    title: 语音合成
+    desc: 将文本转换为语音输出
+    integrations: 语音大模型
+    """
+    ctx = runtime.context
+    
+    # 初始化TTS客户端
+    tts_client = TTSClient(ctx=ctx)
+    
+    # 根据孩子年龄选择合适的语音
+    # 12岁以下使用儿童语音，否则使用正常语音
+    if state.child_age <= 12:
+        voice_id = "zh_female_xueayi_saturn_bigtts"  # 儿童读物声音
+    else:
+        voice_id = "zh_female_xiaohe_uranus_bigtts"  # 默认女声
+    
+    # 语音合成
+    audio_url, audio_size = tts_client.synthesize(
+        uid=f"child_{state.child_age}",
+        text=state.text,
+        speaker=voice_id,
+        audio_format="mp3",
+        sample_rate=24000,
+        speech_rate=10,  # 稍微放慢语速，适合孩子
+        loudness_rate=10  # 提高音量
+    )
+    
+    return VoiceSynthesisOutput(
+        audio_url=audio_url,
+        audio_size=audio_size
+    )
+
+
+# ============== 条件判断函数：路由决策 ==============
+def route_decision(state: RouteDecisionInput) -> str:
+    """
+    title: 路由决策
+    desc: 根据触发类型和作业状态决定执行哪个分支
+    """
+    if state.trigger_type == "care":
+        return "主动关心"
+    elif state.trigger_type == "remind":
+        return "作业提醒"
+    elif state.trigger_type == "practice":
+        return "口语练习"
+    elif state.trigger_type == "conversation":
+        return "实时对话"
+    else:
+        return "实时对话"  # 默认分支
