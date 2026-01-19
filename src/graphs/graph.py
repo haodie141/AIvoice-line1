@@ -327,3 +327,22 @@ builder.add_edge("save_memory", END)
 
 # 编译图
 main_graph = builder.compile()
+
+# ============== 实时通话模式切换 ==============
+# 为了支持低延迟实时通话，这里可以根据环境变量切换图
+# 注意：需要重启服务才能生效
+
+import os
+GRAPH_MODE = os.getenv("COZE_GRAPH_MODE", "full_companion").lower()
+
+if GRAPH_MODE == "realtime_call":
+    try:
+        from graphs.realtime_call_graph import realtime_call_graph
+        main_graph = realtime_call_graph
+        print("✅ COZE_GRAPH_MODE=realtime_call: 已切换到低延迟实时通话模式")
+    except Exception as e:
+        print(f"⚠️ 切换模式失败: {e}，使用默认完整模式")
+elif GRAPH_MODE == "full_companion":
+    print("✅ COZE_GRAPH_MODE=full_companion: 使用完整陪伴机器人模式")
+else:
+    print(f"⚠️ 未知模式: {GRAPH_MODE}，使用默认完整模式")
