@@ -345,14 +345,26 @@ def wrap_realtime_call(
     )
 
 
-# ============== 条件判断包装函数 ==============
-def wrap_route_decision(state: LoadMemoryWrapOutput) -> str:
-    """路由决策"""
-    node_input = RouteDecisionInput(
-        trigger_type=state.trigger_type,
-        need_remind=False  # 这个参数在load阶段还不确定
-    )
-    return route_decision(node_input)
+# ============== 条件判断函数 ==============
+def route_decision_graph(state: LoadMemoryWrapOutput) -> str:
+    """
+    title: 路由决策
+    desc: 根据触发类型决定执行哪个分支
+    """
+    trigger_type = state.trigger_type if state.trigger_type else "realtime_call"
+
+    if trigger_type == "care":
+        return "主动关心"
+    elif trigger_type == "remind":
+        return "作业提醒"
+    elif trigger_type == "practice":
+        return "口语练习"
+    elif trigger_type == "conversation":
+        return "实时对话"
+    elif trigger_type == "realtime_call":
+        return "实时通话"
+    else:
+        return "实时通话"  # 默认分支
 
 
 # ============== 创建主图 ==============
@@ -380,7 +392,7 @@ builder.set_entry_point("load_memory")
 # 添加条件分支
 builder.add_conditional_edges(
     source="load_memory",
-    path=wrap_route_decision,
+    path=route_decision_graph,
     path_map={
         "主动关心": "active_care",
         "作业提醒": "homework_check",
