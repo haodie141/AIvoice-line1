@@ -345,7 +345,14 @@ def wrap_realtime_call(
     )
 
 
-
+# ============== 条件判断包装函数 ==============
+def wrap_route_decision(state: LoadMemoryWrapOutput) -> str:
+    """路由决策"""
+    node_input = RouteDecisionInput(
+        trigger_type=state.trigger_type,
+        need_remind=False  # 这个参数在load阶段还不确定
+    )
+    return route_decision(node_input)
 
 
 # ============== 创建主图 ==============
@@ -373,7 +380,7 @@ builder.set_entry_point("load_memory")
 # 添加条件分支
 builder.add_conditional_edges(
     source="load_memory",
-    path=route_decision,
+    path=wrap_route_decision,
     path_map={
         "主动关心": "active_care",
         "作业提醒": "homework_check",
@@ -388,7 +395,6 @@ builder.add_edge("active_care", "voice_synthesis")
 builder.add_edge("homework_check", "voice_synthesis")
 builder.add_edge("speaking_practice", "voice_synthesis")
 builder.add_edge("realtime_conversation", "voice_synthesis")
-builder.add_edge("realtime_call", END)  # 实时通话直接结束（内部已处理记忆保存和语音合成）
 
 # 语音合成后保存记忆
 builder.add_edge("voice_synthesis", "save_memory")

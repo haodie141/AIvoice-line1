@@ -11,7 +11,6 @@ from coze_coding_dev_sdk import LLMClient, ASRClient, TTSClient
 import requests
 
 from graphs.state import (
-    GlobalState,
     LongTermMemoryInput, LongTermMemoryOutput,
     HomeworkCheckInput, HomeworkCheckOutput,
     ActiveCareInput, ActiveCareOutput,
@@ -396,7 +395,7 @@ def voice_synthesis_node(
 
 
 # ============== 条件判断函数：路由决策 ==============
-def route_decision(state: GlobalState) -> str:
+def route_decision(state: RouteDecisionInput) -> str:
     """
     title: 路由决策
     desc: 根据触发类型和作业状态决定执行哪个分支
