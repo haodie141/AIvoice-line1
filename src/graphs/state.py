@@ -101,15 +101,44 @@ class ActiveCareOutput(BaseModel):
     """主动关心节点输出"""
     care_message: str = Field(..., description="关心的消息内容")
 
-# ============== 节点4：口语练习节点 ==============
+# ============== 节点4：口语练习节点（支持主动引导） ==============
+# 练习阶段定义
+class PracticeStage(BaseModel):
+    """口语练习阶段"""
+    stage: Literal["initiate", "question", "followup", "feedback"] = Field(..., description="练习阶段")
+    current_scenario: str = Field(default="", description="当前场景")
+    turn_count: int = Field(default=0, description="当前对话轮数")
+
+# 场景库定义
+PRACTICE_SCENARIOS = {
+    "daily_life": {
+        "name": "日常生活",
+        "topics": ["学校生活", "家庭时光", "公园散步", "餐厅点餐"]
+    },
+    "interests": {
+        "name": "兴趣爱好",
+        "topics": ["体育运动", "画画创作", "音乐欣赏", "阅读故事"]
+    },
+    "emotions": {
+        "name": "情感表达",
+        "topics": ["开心的事情", "难过的时候", "生气的理由", "惊喜的瞬间"]
+    },
+    "imagination": {
+        "name": "想象力",
+        "topics": ["梦想未来", "魔法世界", "冒险故事", "发明创造"]
+    }
+}
+
 class SpeakingPracticeInput(BaseModel):
-    """口语练习节点输入"""
+    """口语练习节点输入（支持主动引导）"""
     user_input_audio: Optional[File] = Field(default=None, description="用户输入音频")
     user_input_text: str = Field(default="", description="用户输入文本（备用）")
     child_name: str = Field(..., description="孩子姓名")
     child_age: int = Field(..., description="孩子年龄")
+    child_interests: List[str] = Field(default=[], description="孩子兴趣爱好")
     conversation_history: List[dict] = Field(default=[], description="对话历史")
-    practice_topic: str = Field(default="", description="练习主题")
+    practice_stage: Optional[PracticeStage] = Field(default=None, description="当前练习阶段")
+    is_first_turn: bool = Field(default=True, description="是否是第一轮对话")
 
 class SpeakingPracticeOutput(BaseModel):
     """口语练习节点输出"""
@@ -117,6 +146,8 @@ class SpeakingPracticeOutput(BaseModel):
     corrected_text: str = Field(default="", description="纠正后的文本")
     feedback: str = Field(..., description="反馈和指导")
     practice_count: int = Field(default=0, description="本次练习后的总次数")
+    next_stage: Optional[PracticeStage] = Field(default=None, description="下一阶段的练习信息")
+    followup_question: str = Field(default="", description="下一轮的追问问题")
 
 # ============== 节点5：实时对话节点 ==============
 class RealtimeConversationInput(BaseModel):
@@ -207,6 +238,7 @@ class SpeakingPracticeWrapInput(BaseModel):
     user_input_text: str = Field(default="", description="用户输入文本")
     child_name: str = Field(..., description="孩子姓名")
     child_age: int = Field(..., description="孩子年龄")
+    child_interests: List[str] = Field(default=[], description="孩子兴趣爱好")
     conversation_history: List[dict] = Field(default=[], description="对话历史")
 
 class SpeakingPracticeWrapOutput(BaseModel):

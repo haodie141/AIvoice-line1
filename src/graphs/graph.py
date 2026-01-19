@@ -106,14 +106,16 @@ def wrap_speaking_practice(
     config: RunnableConfig, 
     runtime: Runtime[Context]
 ) -> SpeakingPracticeWrapOutput:
-    """口语练习"""
+    """口语练习（支持主动引导）"""
     node_input = SpeakingPracticeInput(
         user_input_audio=state.user_input_audio,
         user_input_text=state.user_input_text,
         child_name=state.child_name,
         child_age=state.child_age,
+        child_interests=state.child_interests,
         conversation_history=state.conversation_history,
-        practice_topic=""
+        practice_stage=None,  # 从GlobalState中获取
+        is_first_turn=True if not state.user_input_text and not state.user_input_audio else False
     )
     node_output: SpeakingPracticeOutput = speaking_practice_node(node_input, config, runtime)
     

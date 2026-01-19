@@ -194,7 +194,7 @@ def active_care_node(
     return ActiveCareOutput(care_message=care_message.strip())
 
 
-# ============== 节点4：口语练习节点 ==============
+# ============== 节点4：口语练习节点（支持主动引导） ==============
 def speaking_practice_node(
     state: SpeakingPracticeInput,
     config: RunnableConfig,
@@ -202,26 +202,12 @@ def speaking_practice_node(
 ) -> SpeakingPracticeOutput:
     """
     title: 口语练习
-    desc: 语音识别、纠正和反馈，帮助孩子练习口语
+    desc: 智能口语练习，支持主动发起话题、苏格拉底式提问和追问式延伸对话
     integrations: 语音大模型, 大语言模型
     """
     ctx = runtime.context
     
-    recognized_text = state.user_input_text
-    
-    # 如果有音频输入，进行语音识别
-    if state.user_input_audio and not recognized_text:
-        asr_client = ASRClient(ctx=ctx)
-        
-        try:
-            # 使用URL进行语音识别
-            text, data = asr_client.recognize(
-                uid=f"{state.child_name}_practice",
-                url=state.user_input_audio.url
-            )
-            recognized_text = text
-        except Exception as e:
-            recognized_text = state.user_input_text  # 降级到使用文本输入
+    from graphs.state import PracticeStage, PRACTICE_SCENARIOS
     
     # 构建学习进度信息
     practice_count = 0
@@ -232,10 +218,216 @@ def speaking_practice_node(
     if learning_progress and "speaking_practice_count" in learning_progress:
         practice_count = learning_progress["speaking_practice_count"]
     
-    # 使用大模型进行语音纠正和反馈
-    client = LLMClient(ctx=ctx)
+    # 判断当前练习阶段
+    current_stage = "initiate"  # 默认阶段
+    if state.practice_stage:
+        current_stage = state.practice_stage.stage
+        turn_count = state.practice_stage.turn_count
+    else:
+        turn_count = 0
     
-    feedback_prompt = f"""孩子的姓名：{state.child_name}，年龄：{state.child_age}岁
+    # 获取场景信息
+    current_scenario = ""
+    if state.practice_stage and state.practice_stage.current_scenario:
+        current_scenario = state.practice_stage.current_scenario
+    
+    # 语音识别
+    recognized_text = state.user_input_text
+    if state.user_input_audio and not recognized_text:
+        asr_client = ASRClient(ctx=ctx)
+        try:
+            text, data = asr_client.recognize(
+                uid=f"{state.child_name}_practice",
+                url=state.user_input_audio.url
+            )
+            recognized_text = text
+        except Exception as e:
+            recognized_text = state.user_input_text
+    
+    client = LLMClient(ctx=ctx)
+    feedback = ""
+    corrected_text = recognized_text
+    next_stage = None
+    followup_question = ""
+    
+    # ============== 阶段1：主动发起话题（第一轮，孩子没有输入） ==============
+    if current_stage == "initiate" and not recognized_text.strip():
+        # 根据孩子兴趣选择场景
+        scenario_key = "daily_life"
+        if state.child_interests:
+            if "画画" in state.child_interests or "绘画" in state.child_interests:
+                scenario_key = "interests"
+            elif any(emotion in str(state.child_interests) for emotion in ["开心", "难过", "生气"]):
+                scenario_key = "emotions"
+        
+        scenario_info = PRACTICE_SCENARIOS[scenario_key]
+        topics = scenario_info["topics"]
+        # 随机选择一个话题
+        import random
+        topic = random.choice(topics)
+        
+        initiate_prompt = f"""你是{state.child_name}的口语练习伙伴，现在要主动发起对话，引导孩子开口说话。
+
+孩子姓名：{state.child_name}
+孩子年龄：{state.child_age}岁
+孩子兴趣：{', '.join(state.child_interests) if state.child_interests else '未知'}
+
+当前场景：{scenario_info['name']}
+选定的主题：{topic}
+
+请用友好、热情的语气主动发起对话，提出一个开放性的问题，引导孩子开始表达。
+
+要求：
+1. 问题要简单易懂，适合{state.child_age}岁孩子理解
+2. 问题要是开放式的，让孩子可以自由发挥
+3. 语气要亲切，像朋友一样
+4. 如果孩子有相关兴趣，可以结合兴趣提问
+5. 不要包含任何动作描述（如：（微笑）、（点头）等）
+6. 不要使用表情符号
+7. 只输出一个问题，不要多问
+
+示例场景和问题：
+- 日常生活·学校生活：你好呀！今天在学校里发生了什么有趣的事情吗？
+- 兴趣爱好·体育运动：你最喜欢什么运动呀？能告诉我为什么吗？
+- 情感表达·开心的事情：今天有什么事情让你特别开心吗？"""
+        
+        messages = [HumanMessage(content=initiate_prompt)]
+        response = client.invoke(
+            messages=messages,
+            model="doubao-seed-1-8-251228",
+            temperature=0.9
+        )
+        
+        feedback = str(response.content).strip()
+        
+        # 设置下一阶段为提问
+        next_stage = PracticeStage(
+            stage="question",
+            current_scenario=f"{scenario_info['name']}·{topic}",
+            turn_count=turn_count + 1
+        )
+        
+    # ============== 阶段2：苏格拉底式提问（孩子第一次回答） ==============
+    elif current_stage == "question":
+        # 分析孩子的回答，给予鼓励并追问
+        question_prompt = f"""你是{state.child_name}的口语练习伙伴，正在和孩子进行对话练习。
+
+孩子姓名：{state.child_name}
+孩子年龄：{state.child_age}岁
+当前场景：{current_scenario}
+孩子刚才说：{recognized_text}
+
+请对孩子进行苏格拉底式引导：
+
+1. **肯定和鼓励**：首先表扬孩子的回答，具体指出回答中的亮点
+2. **深入追问**：根据孩子的回答，提出一个引导性问题，让孩子继续深入表达
+   - 不要直接问"为什么"，可以问"能多说说吗"、"还有呢"、"当时是什么样的"
+   - 让孩子描述更多细节和感受
+3. **温和纠正**：如果有明显的发音或语法错误，用示范的方式纠正，不要直接说"你错了"
+   - 例如："这个问题可以说成XXX，这样说更自然哦"
+
+要求：
+- 只输出对话内容，不要包含任何动作描述
+- 不要使用表情符号
+- 保持友好、鼓励的语气
+- 问题要是开放式的，引导孩子继续说下去"""
+        
+        messages = [HumanMessage(content=question_prompt)]
+        response = client.invoke(
+            messages=messages,
+            model="doubao-seed-1-8-251228",
+            temperature=0.85
+        )
+        
+        feedback = str(response.content).strip()
+        
+        # 设置下一阶段为追问
+        next_stage = PracticeStage(
+            stage="followup",
+            current_scenario=current_scenario,
+            turn_count=turn_count + 1
+        )
+        
+    # ============== 阶段3：追问式延伸（深入话题） ==============
+    elif current_stage == "followup":
+        # 继续追问，控制轮数，适时总结
+        if turn_count >= 3:
+            # 进入反馈阶段
+            feedback_prompt = f"""你是{state.child_name}的口语练习伙伴，要给孩子一个积极的总结反馈。
+
+孩子姓名：{state.child_name}
+孩子年龄：{state.child_age}岁
+当前场景：{current_scenario}
+孩子的最后一句：{recognized_text}
+对话轮数：{turn_count}
+
+请给孩子一个温暖的总结：
+
+1. **整体表扬**：总结孩子今天表现好的地方
+2. **成长建议**：给出1-2个具体的改进建议（如果有）
+3. **鼓励继续**：鼓励孩子下次再来练习
+
+要求：
+- 语气要温暖、真诚
+- 不要包含任何动作描述
+- 不要使用表情符号
+- 控制在2-3句话以内"""
+            
+            messages = [HumanMessage(content=feedback_prompt)]
+            response = client.invoke(
+                messages=messages,
+                model="doubao-seed-1-8-251228",
+                temperature=0.7
+            )
+            
+            feedback = str(response.content).strip()
+            
+            # 练习结束，不设置下一阶段
+            next_stage = None
+        else:
+            # 继续追问
+            followup_prompt = f"""你是{state.child_name}的口语练习伙伴，要继续引导孩子深入表达。
+
+孩子姓名：{state.child_name}
+孩子年龄：{state.child_age}岁
+当前场景：{current_scenario}
+孩子刚才说：{recognized_text}
+对话轮数：{turn_count}/3
+
+请继续用苏格拉底式提问引导孩子：
+
+1. **肯定孩子的表达**
+2. **提出新的追问**，引导孩子：
+   - 描述更多细节
+   - 分享更多感受
+   - 联系相关经历
+3. **适度纠正**（如果有错误）
+
+要求：
+- 只输出对话内容
+- 不要使用表情符号
+- 问题要逐步深入，但不要超出孩子的认知范围
+- 如果接近3轮，要开始准备总结"""
+            
+            messages = [HumanMessage(content=followup_prompt)]
+            response = client.invoke(
+                messages=messages,
+                model="doubao-seed-1-8-251228",
+                temperature=0.85
+            )
+            
+            feedback = str(response.content).strip()
+            
+            next_stage = PracticeStage(
+                stage="followup",
+                current_scenario=current_scenario,
+                turn_count=turn_count + 1
+            )
+    
+    # ============== 阶段4：反馈（传统模式） ==============
+    else:
+        # 传统的纠正和反馈模式
+        feedback_prompt = f"""孩子的姓名：{state.child_name}，年龄：{state.child_age}岁
 孩子刚才说：{recognized_text}
 已练习次数：{practice_count}
 
@@ -248,38 +440,34 @@ def speaking_practice_node(
 请用友好、鼓励的语气回复，适合{state.child_age}岁的孩子理解。
 
 重要提醒：
-- 只输出对话内容，不要包含任何动作描述（如：（微笑）、（点头）、（鼓掌）等）
-- 不要包含括号内的任何文字
+- 只输出对话内容，不要包含任何动作描述
 - 不要使用表情符号
 - 直接用文字表达你的鼓励和指导"""
-    
-    messages = [
-        HumanMessage(content=feedback_prompt)
-    ]
-    
-    response = client.invoke(
-        messages=messages,
-        model="doubao-seed-1-8-251228",
-        temperature=0.8
-    )
-    
-    if isinstance(response.content, str):
-        feedback = response.content
-    else:
-        feedback = str(response.content)
+        
+        messages = [HumanMessage(content=feedback_prompt)]
+        response = client.invoke(
+            messages=messages,
+            model="doubao-seed-1-8-251228",
+            temperature=0.8
+        )
+        
+        feedback = str(response.content).strip()
     
     # 更新练习次数
     new_practice_count = practice_count + 1
     memory_store.update_learning_progress(state.child_name, {
         "speaking_practice_count": new_practice_count,
-        "last_practice_time": datetime.now().isoformat()
+        "last_practice_time": datetime.now().isoformat(),
+        "last_scenario": current_scenario
     })
     
     return SpeakingPracticeOutput(
         recognized_text=recognized_text,
-        corrected_text=recognized_text,  # LLM会自动在反馈中纠正
-        feedback=feedback.strip(),
-        practice_count=new_practice_count
+        corrected_text=corrected_text,
+        feedback=feedback,
+        practice_count=new_practice_count,
+        next_stage=next_stage,
+        followup_question=followup_question
     )
 
 
