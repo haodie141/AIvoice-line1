@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
+import random
 
 
 class MemoryStore:
@@ -33,7 +34,8 @@ class MemoryStore:
                 "conversation_history": [],
                 "learning_progress": {},
                 "speaking_practice_count": 0,
-                "homework_list": []  # 作业列表，包含时间信息
+                "homework_list": [],  # 作业列表，包含时间信息
+                "knowledge_points": []  # 知识点列表（长期记忆）
             }
         return self._data[child_id]
     
@@ -180,6 +182,228 @@ class MemoryStore:
     def update_speaking_practice_count(self, child_id: str, count: int) -> None:
         """更新口语练习次数"""
         self._get_child_data(child_id)["speaking_practice_count"] = count
+    
+    # ============== 知识追踪和间隔重复系统 ==============
+    
+    def add_knowledge_point(
+        self, 
+        child_id: str, 
+        point_type: str, 
+        content: str,
+        context: str = ""
+    ) -> str:
+        """
+        添加知识点（长期记忆）
+        
+        Args:
+            child_id: 孩子ID
+            point_type: 知识点类型（word/concept/skill）
+            content: 知识点内容
+            context: 学习上下文
+        
+        Returns:
+            知识点ID
+        """
+        child_data = self._get_child_data(child_id)
+        
+        # 检查是否已存在相同知识点
+        for kp in child_data["knowledge_points"]:
+            if kp.get("content", "").lower() == content.lower():
+                return kp["id"]
+        
+        # 生成知识点ID
+        kp_id = f"kp_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(child_data['knowledge_points'])}"
+        
+        # 计算首次复习时间（10分钟后）
+        first_review_time = datetime.now() + timedelta(minutes=10)
+        
+        knowledge_point = {
+            "id": kp_id,
+            "type": point_type,
+            "content": content,
+            "context": context,
+            "mastery_level": 0,  # 掌握程度 0-5
+            "learned_at": datetime.now().isoformat(),
+            "next_review_time": first_review_time.isoformat(),
+            "review_count": 0,
+            "correct_count": 0,
+            "is_due": False
+        }
+        
+        child_data["knowledge_points"].append(knowledge_point)
+        return kp_id
+    
+    def update_knowledge_mastery(
+        self, 
+        child_id: str, 
+        knowledge_id: str, 
+        is_correct: bool
+    ) -> Optional[Dict[str, Any]]:
+        """
+        更新知识点掌握程度（基于简化版SM-2算法）
+        
+        Args:
+            child_id: 孩子ID
+            knowledge_id: 知识点ID
+            is_correct: 是否回答正确
+        
+        Returns:
+            更新后的知识点，如果不存在则返回None
+        """
+        child_data = self._get_child_data(child_id)
+        
+        for kp in child_data["knowledge_points"]:
+            if kp["id"] == knowledge_id:
+                kp["review_count"] += 1
+                
+                if is_correct:
+                    kp["correct_count"] += 1
+                    # 正确，提高掌握程度
+                    if kp["mastery_level"] < 5:
+                        kp["mastery_level"] += 1
+                else:
+                    # 错误，降低掌握程度（但不低于1）
+                    if kp["mastery_level"] > 1:
+                        kp["mastery_level"] -= 1
+                
+                # 计算下次复习时间（基于掌握程度）
+                kp["next_review_time"] = self._calculate_next_review(
+                    kp["mastery_level"],
+                    kp["review_count"]
+                ).isoformat()
+                
+                return kp
+        
+        return None
+    
+    def _calculate_next_review(
+        self, 
+        mastery_level: int, 
+        review_count: int
+    ) -> datetime:
+        """
+        计算下次复习时间（简化版间隔重复算法）
+        
+        Args:
+            mastery_level: 掌握程度 0-5
+            review_count: 复习次数
+        
+        Returns:
+            下次复习时间
+        """
+        # 间隔时间表（根据掌握程度）
+        intervals = {
+            0: timedelta(minutes=10),    # 刚学习：10分钟后
+            1: timedelta(hours=1),      # 初步掌握：1小时后
+            2: timedelta(days=1),       # 熟悉：1天后
+            3: timedelta(days=3),       # 掌握：3天后
+            4: timedelta(days=7),       # 熟练：7天后
+            5: timedelta(days=14)       # 精通：14天后
+        }
+        
+        # 获取基础间隔
+        base_interval = intervals.get(mastery_level, timedelta(days=1))
+        
+        # 添加随机波动（±20%），避免所有知识点在同一时间复习
+        random_factor = random.uniform(0.8, 1.2)
+        actual_interval = timedelta(
+            seconds=int(base_interval.total_seconds() * random_factor)
+        )
+        
+        return datetime.now() + actual_interval
+    
+    def get_due_for_review(
+        self, 
+        child_id: str, 
+        limit: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        获取需要复习的知识点
+        
+        Args:
+            child_id: 孩子ID
+            limit: 最多返回数量
+        
+        Returns:
+            需要复习的知识点列表
+        """
+        now = datetime.now()
+        child_data = self._get_child_data(child_id)
+        due_points = []
+        
+        for kp in child_data.get("knowledge_points", []):
+            # 检查是否到期
+            next_review_str = kp.get("next_review_time", "")
+            if not next_review_str:
+                continue
+            
+            try:
+                next_review = datetime.fromisoformat(next_review_str)
+                if next_review <= now:
+                    # 到期，添加到列表
+                    due_points.append({
+                        **kp,
+                        "is_due": True
+                    })
+            except (ValueError, TypeError):
+                continue
+        
+        # 按到期时间排序
+        due_points.sort(key=lambda x: x.get("next_review_time", ""))
+        
+        # 限制返回数量
+        return due_points[:limit]
+    
+    def get_knowledge_point_by_content(
+        self, 
+        child_id: str, 
+        content: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        根据内容查找知识点
+        
+        Args:
+            child_id: 孩子ID
+            content: 知识点内容
+        
+        Returns:
+            知识点字典，如果不存在则返回None
+        """
+        child_data = self._get_child_data(child_id)
+        
+        for kp in child_data.get("knowledge_points", []):
+            if kp.get("content", "").lower() == content.lower():
+                return kp
+        
+        return None
+    
+    def get_all_knowledge_points(self, child_id: str) -> List[Dict[str, Any]]:
+        """获取所有知识点"""
+        return self._get_child_data(child_id).get("knowledge_points", [])
+    
+    def get_knowledge_statistics(self, child_id: str) -> Dict[str, Any]:
+        """获取知识点统计信息"""
+        knowledge_points = self.get_all_knowledge_points(child_id)
+        
+        total = len(knowledge_points)
+        if total == 0:
+            return {
+                "total": 0,
+                "mastered": 0,
+                "learning": 0,
+                "need_review": 0
+            }
+        
+        mastered = sum(1 for kp in knowledge_points if kp.get("mastery_level", 0) >= 4)
+        learning = sum(1 for kp in knowledge_points if 2 <= kp.get("mastery_level", 0) < 4)
+        need_review = len(self.get_due_for_review(child_id, limit=100))
+        
+        return {
+            "total": total,
+            "mastered": mastered,
+            "learning": learning,
+            "need_review": need_review
+        }
     
     def clear_child_data(self, child_id: str) -> None:
         """清除孩子所有数据"""

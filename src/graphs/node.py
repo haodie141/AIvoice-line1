@@ -252,21 +252,80 @@ def speaking_practice_node(
     
     # ============== 阶段1：主动发起话题（第一轮，孩子没有输入） ==============
     if current_stage == "initiate" and not recognized_text.strip():
-        # 根据孩子兴趣选择场景
-        scenario_key = "daily_life"
-        if state.child_interests:
-            if "画画" in state.child_interests or "绘画" in state.child_interests:
-                scenario_key = "interests"
-            elif any(emotion in str(state.child_interests) for emotion in ["开心", "难过", "生气"]):
-                scenario_key = "emotions"
-        
-        scenario_info = PRACTICE_SCENARIOS[scenario_key]
-        topics = scenario_info["topics"]
-        # 随机选择一个话题
-        import random
-        topic = random.choice(topics)
-        
-        initiate_prompt = f"""你是{state.child_name}的口语练习伙伴，现在要主动发起对话，引导孩子开口说话。
+        # ========== 新增：优先检查是否有需要复习的知识点 ==========
+        try:
+            due_for_review = memory_store.get_due_for_review(state.child_name, limit=1)
+            if due_for_review:
+                # 有需要复习的知识点，优先复习
+                review_kp = due_for_review[0]
+                kp_type = "单词" if review_kp.get("type") == "word" else "概念"
+                kp_content = review_kp.get("content", "")
+                kp_context = review_kp.get("context", "")
+                
+                review_prompt = f"""你是{state.child_name}的口语练习伙伴，现在要帮助孩子复习之前学过的知识。
+
+孩子姓名：{state.child_name}
+孩子年龄：{state.child_age}岁
+
+要复习的{kp_type}：{kp_content}
+学习时的上下文：{kp_context}
+
+请用友好、自然的方式引导孩子回忆这个知识点：
+
+1. **温和提醒**：不要直接问"你还记得XXX吗"，要自然地提及
+2. **情境带入**：结合学习时的上下文或相关场景
+3. **鼓励回忆**：给孩子思考和回忆的空间
+4. **不要直接给答案**：引导孩子自己说出来
+
+要求：
+- 语气要自然、亲切，像朋友聊天一样
+- 不要包含任何动作描述
+- 不要使用表情符号
+- 只输出引导性的话语
+- 如果孩子当时理解了这个知识点，可以给一个小提示
+
+示例（复习单词"恐龙"）：
+宝贝，上次我们聊到很多神奇的动物，你记得那种长得很大、很久很久以前就生活在地球上的动物叫什么吗？"""
+                
+                messages = [HumanMessage(content=review_prompt)]
+                response = client.invoke(
+                    messages=messages,
+                    model="doubao-seed-1-8-251228",
+                    temperature=0.8
+                )
+                
+                feedback = str(response.content).strip()
+                
+                # 设置下一阶段为复习模式（标记这是复习）
+                next_stage = PracticeStage(
+                    stage="question",
+                    current_scenario=f"复习·{kp_type}",
+                    turn_count=turn_count + 1
+                )
+                
+                # 存储当前复习的知识点ID
+                memory_store.update_learning_progress(state.child_name, {
+                    "current_review_kp_id": review_kp["id"]
+                })
+                
+                print(f"✅ 发起复习：{kp_content}")
+            else:
+                # 没有需要复习的，正常发起新话题
+                # 根据孩子兴趣选择场景
+                scenario_key = "daily_life"
+                if state.child_interests:
+                    if "画画" in state.child_interests or "绘画" in state.child_interests:
+                        scenario_key = "interests"
+                    elif any(emotion in str(state.child_interests) for emotion in ["开心", "难过", "生气"]):
+                        scenario_key = "emotions"
+                
+                scenario_info = PRACTICE_SCENARIOS[scenario_key]
+                topics = scenario_info["topics"]
+                # 随机选择一个话题
+                import random
+                topic = random.choice(topics)
+                
+                initiate_prompt = f"""你是{state.child_name}的口语练习伙伴，现在要主动发起对话，引导孩子开口说话。
 
 孩子姓名：{state.child_name}
 孩子年龄：{state.child_age}岁
@@ -290,22 +349,25 @@ def speaking_practice_node(
 - 日常生活·学校生活：你好呀！今天在学校里发生了什么有趣的事情吗？
 - 兴趣爱好·体育运动：你最喜欢什么运动呀？能告诉我为什么吗？
 - 情感表达·开心的事情：今天有什么事情让你特别开心吗？"""
-        
-        messages = [HumanMessage(content=initiate_prompt)]
-        response = client.invoke(
-            messages=messages,
-            model="doubao-seed-1-8-251228",
-            temperature=0.9
-        )
-        
-        feedback = str(response.content).strip()
-        
-        # 设置下一阶段为提问
-        next_stage = PracticeStage(
-            stage="question",
-            current_scenario=f"{scenario_info['name']}·{topic}",
-            turn_count=turn_count + 1
-        )
+                
+                messages = [HumanMessage(content=initiate_prompt)]
+                response = client.invoke(
+                    messages=messages,
+                    model="doubao-seed-1-8-251228",
+                    temperature=0.9
+                )
+                
+                feedback = str(response.content).strip()
+                
+                # 设置下一阶段为提问
+                next_stage = PracticeStage(
+                    stage="question",
+                    current_scenario=f"{scenario_info['name']}·{topic}",
+                    turn_count=turn_count + 1
+                )
+        except Exception as e:
+            print(f"⚠️ 复习检查失败，使用默认话题: {e}")
+            # 降级：使用默认话题
         
     # ============== 阶段2：苏格拉底式提问（孩子第一次回答） ==============
     elif current_stage == "question":
@@ -340,6 +402,64 @@ def speaking_practice_node(
         )
         
         feedback = str(response.content).strip()
+        
+        # ========== 新增：识别并记录知识点 ==========
+        try:
+            identify_prompt = f"""你是一个知识提取助手。请从以下孩子的回答中识别出新知识点（单词或概念）。
+
+孩子姓名：{state.child_name}
+孩子年龄：{state.child_age}岁
+孩子说：{recognized_text}
+
+请识别以下内容：
+1. 新单词：孩子可能刚学会或不熟悉的单词
+2. 新概念：孩子可能刚理解的概念
+
+要求：
+- 只返回JSON格式
+- 只识别真正的新内容，不要提取常见词
+- 每个知识点包含type（word/concept）、content（内容）
+
+返回格式：
+{{"knowledge_points": [{{"type": "word", "content": "单词内容"}}]}}"""
+            
+            identify_messages = [HumanMessage(content=identify_prompt)]
+            identify_response = client.invoke(
+                messages=identify_messages,
+                model="doubao-seed-1-8-251228",
+                temperature=0.3
+            )
+            
+            identify_text = str(identify_response.content).strip()
+            if "{" in identify_text and "}" in identify_text:
+                json_start = identify_text.find("{")
+                json_end = identify_text.rfind("}") + 1
+                json_str = identify_text[json_start:json_end]
+                identify_result = json.loads(json_str)
+                
+                # 记录识别到的知识点
+                for kp in identify_result.get("knowledge_points", []):
+                    kp_id = memory_store.add_knowledge_point(
+                        child_id=state.child_name,
+                        point_type=kp.get("type", "word"),
+                        content=kp.get("content", ""),
+                        context=f"在口语练习中学习：{recognized_text[:50]}"
+                    )
+                    print(f"✅ 记录新知识点：{kp.get('content', '')}")
+        except Exception as e:
+            print(f"⚠️ 知识点识别失败: {e}")
+        
+        # ========== 新增：检查是否有需要复习的知识点 ==========
+        try:
+            due_for_review = memory_store.get_due_for_review(state.child_name, limit=2)
+            if due_for_review:
+                # 暂时存储到学习进度中，供下次使用
+                memory_store.update_learning_progress(state.child_name, {
+                    "pending_review": due_for_review
+                })
+                print(f"✅ 发现{len(due_for_review)}个需要复习的知识点")
+        except Exception as e:
+            print(f"⚠️ 复习检查失败: {e}")
         
         # 设置下一阶段为追问
         next_stage = PracticeStage(
