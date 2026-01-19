@@ -7,7 +7,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
 from coze_coding_utils.runtime_ctx.context import Context
-from coze_coding_dev_sdk import LLMClient, ASRClient, TTSClient
+from coze_coding_dev_sdk import LLMClient, ASRClient, TTSClient, SearchClient
 import requests
 
 from graphs.state import (
@@ -283,7 +283,7 @@ def speaking_practice_node(
     )
 
 
-# ============== 节点5：实时对话节点（Agent节点） ==============
+# ============== 节点5：实时对话节点（Agent节点，支持联网检索） ==============
 def realtime_conversation_node(
     state: RealtimeConversationInput,
     config: RunnableConfig,
@@ -291,8 +291,8 @@ def realtime_conversation_node(
 ) -> RealtimeConversationOutput:
     """
     title: 实时对话
-    desc: 与孩子进行实时对话，回应孩子的问题和需求（支持时间感知的上下文）
-    integrations: 大语言模型
+    desc: 与孩子进行实时对话，回应孩子的问题和需求（支持时间感知的上下文和联网检索）
+    integrations: 大语言模型, 联网搜索
     """
     ctx = runtime.context
     
@@ -317,7 +317,73 @@ def realtime_conversation_node(
     time_of_day = "早上" if current_time.hour < 12 else "下午" if current_time.hour < 18 else "晚上"
     current_date = current_time.strftime("%Y年%m月%d日")
     
-    # 渲染用户提示词（包含时间信息）
+    # ============== 新增：判断是否需要联网检索 ==============
+    search_context = ""
+    try:
+        # 使用轻量级LLM判断是否需要联网搜索
+        judgment_prompt = f"""你是一个检索需求判断助手。判断以下孩子的问题是否需要联网搜索获取最新信息。
+
+孩子的年龄：{state.child_age}岁
+孩子的问题：{state.user_input_text}
+
+需要联网搜索的场景：
+- 询问实时信息（如天气、新闻、时事热点）
+- 询问最新数据（如最近的比赛结果、新出的产品）
+- 询问具体事实（如某个历史事件、科学知识）
+- 询问时事话题（如近期的社会事件）
+
+不需要联网搜索的场景：
+- 日常聊天（如"你好"、"我喜欢你"）
+- 作业相关（如"帮我检查作业"）
+- 情感表达（如"我很开心"、"我很难过"）
+- 学习辅导（如"这道题怎么做"）
+- 已经有明确答案的问题
+
+请只返回JSON格式，不要其他文字：
+{{"need_search": true/false, "search_query": "搜索关键词或空字符串"}}
+
+规则：
+- need_search: 需要联网搜索设为true，否则false
+- search_query: 提取搜索关键词，如果不需要搜索则为空字符串"""
+        
+        client = LLMClient(ctx=ctx)
+        judgment_messages = [HumanMessage(content=judgment_prompt)]
+        judgment_response = client.invoke(
+            messages=judgment_messages,
+            model="doubao-seed-1-8-251228",
+            temperature=0.1
+        )
+        
+        # 解析判断结果
+        judgment_text = str(judgment_response.content).strip()
+        if "{" in judgment_text and "}" in judgment_text:
+            json_start = judgment_text.find("{")
+            json_end = judgment_text.rfind("}") + 1
+            json_str = judgment_text[json_start:json_end]
+            judgment_result = json.loads(json_str)
+            
+            if judgment_result.get("need_search", False):
+                search_query = judgment_result.get("search_query", state.user_input_text)
+                
+                # 调用联网搜索
+                try:
+                    search_client = SearchClient(ctx=ctx)
+                    search_response = search_client.web_search_with_summary(
+                        query=search_query,
+                        count=3
+                    )
+                    
+                    # 提取搜索摘要作为上下文
+                    if search_response.summary:
+                        search_context = f"\n\n联网检索信息：\n{search_response.summary}\n"
+                except Exception as search_error:
+                    # 搜索失败，继续正常对话
+                    print(f"联网搜索失败: {search_error}")
+    except Exception as e:
+        # 判断失败，继续正常对话
+        print(f"检索需求判断失败: {e}")
+    
+    # ============== 渲染用户提示词（包含时间信息和搜索上下文） ==============
     up_tpl = Template(up)
     user_prompt = up_tpl.render({
         "user_input": state.user_input_text,
@@ -325,7 +391,8 @@ def realtime_conversation_node(
         "conversation_history": state.conversation_history[-3:] if state.conversation_history else [],
         "current_time": current_time.strftime("%H:%M"),
         "time_of_day": time_of_day,
-        "current_date": current_date
+        "current_date": current_date,
+        "search_context": search_context  # 新增：搜索上下文
     })
     
     # 初始化LLM客户端
