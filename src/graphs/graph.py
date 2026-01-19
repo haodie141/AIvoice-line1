@@ -4,7 +4,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
 from coze_coding_utils.runtime_ctx.context import Context
 
-from graphs.state import (
+from .state import (
     GlobalState,
     GraphInput,
     GraphOutput,
@@ -23,7 +23,7 @@ from graphs.state import (
     VoiceSynthesisInput, VoiceSynthesisOutput,
     RouteDecisionInput
 )
-from graphs.node import (
+from .node import (
     long_term_memory_node,
     homework_check_node,
     active_care_node,
@@ -330,14 +330,41 @@ builder.add_edge("save_memory", END)
 # 编译图
 main_graph = builder.compile()
 
-# ============== 实时通话模式切换 ==============
-# 为了支持低延迟实时通话，这里可以根据环境变量切换图
-# 注意：需要重启服务才能生效
+# ============== 工作流模式切换 ==============
+# 支持三种模式，通过环境变量切换：
+# 1. full_companion: 完整陪伴模式（默认，性能优先）
+# 2. realtime_call: 实时通话模式（低延迟，用于实时对话）
+# 3. detailed: 可视化模式（步骤级拆分，类似扣子工作流）
+#
+# 使用方法：
+# export COZE_GRAPH_MODE=detailed  # 可视化模式
+# export COZE_GRAPH_MODE=realtime_call  # 实时通话模式
+# export COZE_GRAPH_MODE=full_companion  # 完整模式（默认）
+#
+# 注意：修改环境变量后需要重启服务
 
 import os
+
 GRAPH_MODE = os.getenv("COZE_GRAPH_MODE", "full_companion").lower()
 
-if GRAPH_MODE == "realtime_call":
+if GRAPH_MODE == "detailed":
+    try:
+        from graphs.visual_graph import visual_graph
+        main_graph = visual_graph
+        print("=" * 60)
+        print("✅ COZE_GRAPH_MODE=detailed: 已切换到可视化模式")
+        print("   工作流已拆分为步骤级节点，清晰展示每个处理步骤")
+        print("   - 口语练习: 7个步骤节点")
+        print("   - 实时对话: 5个步骤节点")
+        print("   - 主动关心: 1个节点")
+        print("   - 作业提醒: 1个节点")
+        print("=" * 60)
+    except Exception as e:
+        print(f"⚠️ 切换到可视化模式失败: {e}")
+        print("   使用默认完整模式")
+        import traceback
+        traceback.print_exc()
+elif GRAPH_MODE == "realtime_call":
     try:
         from graphs.realtime_call_graph import realtime_call_graph
         main_graph = realtime_call_graph
@@ -346,5 +373,7 @@ if GRAPH_MODE == "realtime_call":
         print(f"⚠️ 切换模式失败: {e}，使用默认完整模式")
 elif GRAPH_MODE == "full_companion":
     print("✅ COZE_GRAPH_MODE=full_companion: 使用完整陪伴机器人模式")
+    print("   性能优化模式，适合生产环境")
 else:
     print(f"⚠️ 未知模式: {GRAPH_MODE}，使用默认完整模式")
+    print("   可用模式: full_companion, realtime_call, detailed")

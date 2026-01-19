@@ -2,10 +2,11 @@
 主入口 - 支持多种模式
 1. realtime_call: 低延迟实时通话（ASR→LLM→TTS）
 2. full_companion: 完整陪伴机器人（包含作业管理、主动关心等）
+3. detailed: 可视化模式（步骤级拆分，类似扣子工作流）
 """
 
-from graphs.graph import main_graph as full_companion_graph
-from graphs.realtime_call_graph import realtime_call_graph
+from .graph import main_graph as full_companion_graph
+from .realtime_call_graph import realtime_call_graph
 
 # 默认使用完整陪伴机器人
 default_graph = full_companion_graph
