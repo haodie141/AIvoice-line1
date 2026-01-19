@@ -388,6 +388,7 @@ builder.add_edge("active_care", "voice_synthesis")
 builder.add_edge("homework_check", "voice_synthesis")
 builder.add_edge("speaking_practice", "voice_synthesis")
 builder.add_edge("realtime_conversation", "voice_synthesis")
+builder.add_edge("realtime_call", END)  # 实时通话直接结束（内部已处理记忆保存和语音合成）
 
 # 语音合成后保存记忆
 builder.add_edge("voice_synthesis", "save_memory")
