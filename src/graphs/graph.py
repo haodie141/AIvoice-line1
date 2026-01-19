@@ -21,7 +21,8 @@ from graphs.state import (
     SpeakingPracticeInput, SpeakingPracticeOutput,
     RealtimeConversationInput, RealtimeConversationOutput,
     VoiceSynthesisInput, VoiceSynthesisOutput,
-    RouteDecisionInput
+    RouteDecisionInput,
+    RealtimeCallInput, RealtimeCallOutput
 )
 from graphs.node import (
     long_term_memory_node,
@@ -30,7 +31,8 @@ from graphs.node import (
     speaking_practice_node,
     realtime_conversation_node,
     voice_synthesis_node,
-    route_decision
+    route_decision,
+    realtime_call_fast_node
 )
 
 
@@ -288,6 +290,61 @@ def wrap_save_memory(
     return SaveMemoryWrapOutput(saved=True)
 
 
+# ============== 实时通话快速包装函数 ==============
+def wrap_realtime_call(
+    state: LoadMemoryWrapInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> GraphOutput:
+    """
+    实时通话快速路径
+    直接整合ASR+LLM+TTS，最小化延迟
+    """
+    # 构建输入 - 使用RealtimeCallInput
+    node_input = RealtimeCallInput(
+        user_input_text=state.user_input_text,
+        user_input_audio=state.user_input_audio,  # 直接传递音频
+        child_name=state.child_name,
+        child_age=state.child_age,
+        child_id=state.child_id
+    )
+
+    # 调用快速节点
+    result: RealtimeCallOutput = realtime_call_fast_node(node_input, config, runtime)
+
+    # 异步保存记忆（不阻塞主流程）
+    try:
+        from graphs.memory_store import MemoryStore
+        memory_store = MemoryStore.get_instance()
+
+        # 保存对话记录
+        if result.recognized_text:
+            memory_store.add_conversation(state.child_id, {
+                "role": "user",
+                "content": result.recognized_text,
+                "type": "realtime_call",
+                "timestamp": datetime.now().isoformat()
+            })
+
+        if result.ai_response:
+            memory_store.add_conversation(state.child_id, {
+                "role": "assistant",
+                "content": result.ai_response,
+                "type": "realtime_call",
+                "timestamp": datetime.now().isoformat()
+            })
+    except Exception as e:
+        print(f"⚠️ 异步保存记忆失败（不影响主流程）：{e}")
+
+    return GraphOutput(
+        ai_response=result.ai_response,
+        ai_response_audio=result.ai_response_audio,
+        trigger_type="realtime_call",
+        homework_status="",
+        speaking_practice_count=0
+    )
+
+
 # ============== 条件判断包装函数 ==============
 def wrap_route_decision(state: LoadMemoryWrapOutput) -> str:
     """路由决策"""
@@ -313,6 +370,7 @@ builder.add_node("realtime_conversation", wrap_realtime_conversation, metadata={
     "type": "agent",
     "llm_cfg": "config/realtime_conversation_llm_cfg.json"
 })
+builder.add_node("realtime_call", wrap_realtime_call)  # 实时通话快速节点
 builder.add_node("voice_synthesis", wrap_voice_synthesis)
 builder.add_node("save_memory", wrap_save_memory)
 
@@ -327,7 +385,8 @@ builder.add_conditional_edges(
         "主动关心": "active_care",
         "作业提醒": "homework_check",
         "口语练习": "speaking_practice",
-        "实时对话": "realtime_conversation"
+        "实时对话": "realtime_conversation",
+        "实时通话": "realtime_call"
     }
 )
 
