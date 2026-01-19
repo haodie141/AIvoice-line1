@@ -5,11 +5,11 @@ from utils.file.file import File
 # ============== 全局状态定义 ==============
 class GlobalState(BaseModel):
     """AI陪伴孩子工作流的全局状态（支持时间感知）"""
-    # 孩子基本信息（支持默认值）
-    child_id: str = Field(default="default_child", description="孩子ID")
-    child_name: str = Field(default="小朋友", description="孩子姓名")
-    child_age: int = Field(default=8, description="孩子年龄")
-    child_interests: List[str] = Field(default=["阅读", "游戏"], description="孩子兴趣爱好")
+    # 孩子基本信息
+    child_id: str = Field(..., description="孩子ID")
+    child_name: str = Field(..., description="孩子姓名")
+    child_age: int = Field(..., description="孩子年龄")
+    child_interests: List[str] = Field(default=[], description="孩子兴趣爱好")
     
     # 作业信息（支持时间有效性判断）
     homework_list: List[dict] = Field(default=[], description="作业列表（每个作业包含创建时间、截止时间等）")
@@ -38,17 +38,17 @@ class GlobalState(BaseModel):
 
 # ============== 图的输入输出 ==============
 class GraphInput(BaseModel):
-    """工作流输入 - 支持纯音频输入，其他参数可选"""
-    child_id: str = Field(default="default_child", description="孩子ID（默认：default_child）")
-    child_name: str = Field(default="小朋友", description="孩子姓名（默认：小朋友）")
-    child_age: int = Field(default=8, description="孩子年龄（默认：8岁）")
-    child_interests: List[str] = Field(default=["阅读", "游戏"], description="孩子兴趣爱好（默认：阅读、游戏）")
+    """工作流输入"""
+    child_id: str = Field(..., description="孩子ID")
+    child_name: str = Field(..., description="孩子姓名")
+    child_age: int = Field(..., description="孩子年龄")
+    child_interests: List[str] = Field(default=[], description="孩子兴趣爱好")
     trigger_type: Literal["conversation", "practice", "care", "remind"] = Field(
         default="conversation", 
-        description="触发类型（默认：实时对话）"
+        description="触发类型"
     )
     user_input_text: str = Field(default="", description="用户输入文本（可选）")
-    user_input_audio: Optional[File] = Field(default=None, description="用户输入音频（推荐）")
+    user_input_audio: Optional[File] = Field(default=None, description="用户输入音频（可选）")
     homework_list: List[dict] = Field(default=[], description="作业列表（可选）")
 
 class GraphOutput(BaseModel):
@@ -151,12 +151,12 @@ class RouteDecisionInput(BaseModel):
 
 # ============== 包装节点类型定义（用于图编排） ==============
 class LoadMemoryWrapInput(BaseModel):
-    """加载记忆包装节点输入（支持默认值）"""
-    child_id: str = Field(default="default_child", description="孩子ID")
-    child_name: str = Field(default="小朋友", description="孩子姓名")
-    child_age: int = Field(default=8, description="孩子年龄")
-    child_interests: List[str] = Field(default=["阅读", "游戏"], description="孩子兴趣爱好")
-    trigger_type: str = Field(default="conversation", description="触发类型")
+    """加载记忆包装节点输入"""
+    child_id: str = Field(..., description="孩子ID")
+    child_name: str = Field(..., description="孩子姓名")
+    child_age: int = Field(..., description="孩子年龄")
+    child_interests: List[str] = Field(default=[], description="孩子兴趣爱好")
+    trigger_type: str = Field(..., description="触发类型")
     user_input_text: str = Field(default="", description="用户输入文本")
     user_input_audio: Optional[File] = Field(default=None, description="用户输入音频")
     homework_list: List[dict] = Field(default=[], description="作业列表")
@@ -202,11 +202,11 @@ class ActiveCareWrapOutput(BaseModel):
     ai_response: str = Field(..., description="AI响应")
 
 class SpeakingPracticeWrapInput(BaseModel):
-    """口语练习包装节点输入（支持默认值）"""
+    """口语练习包装节点输入"""
     user_input_audio: Optional[File] = Field(default=None, description="用户输入音频")
     user_input_text: str = Field(default="", description="用户输入文本")
-    child_name: str = Field(default="小朋友", description="孩子姓名")
-    child_age: int = Field(default=8, description="孩子年龄")
+    child_name: str = Field(..., description="孩子姓名")
+    child_age: int = Field(..., description="孩子年龄")
     conversation_history: List[dict] = Field(default=[], description="对话历史")
 
 class SpeakingPracticeWrapOutput(BaseModel):
@@ -216,11 +216,11 @@ class SpeakingPracticeWrapOutput(BaseModel):
     speaking_practice_count: int = Field(default=0, description="练习次数")
 
 class RealtimeConversationWrapInput(BaseModel):
-    """实时对话包装节点输入（支持默认值）"""
-    child_id: str = Field(default="default_child", description="孩子ID")
-    user_input_text: str = Field(default="", description="用户输入文本")
-    child_name: str = Field(default="小朋友", description="孩子姓名")
-    child_age: int = Field(default=8, description="孩子年龄")
+    """实时对话包装节点输入"""
+    child_id: str = Field(..., description="孩子ID")
+    user_input_text: str = Field(..., description="用户输入文本")
+    child_name: str = Field(..., description="孩子姓名")
+    child_age: int = Field(..., description="孩子年龄")
     conversation_history: List[dict] = Field(default=[], description="对话历史")
     homework_status: str = Field(default="", description="作业状态")
 
@@ -229,18 +229,18 @@ class RealtimeConversationWrapOutput(BaseModel):
     ai_response: str = Field(..., description="AI响应")
 
 class VoiceSynthesisWrapInput(BaseModel):
-    """语音合成包装节点输入（支持默认值）"""
-    ai_response: str = Field(default="", description="要合成的文本")
-    child_age: int = Field(default=8, description="孩子年龄")
+    """语音合成包装节点输入"""
+    ai_response: str = Field(..., description="要合成的文本")
+    child_age: int = Field(..., description="孩子年龄")
 
 class VoiceSynthesisWrapOutput(BaseModel):
     """语音合成包装节点输出"""
     ai_response_audio: str = Field(..., description="音频URL")
 
 class SaveMemoryWrapInput(BaseModel):
-    """保存记忆包装节点输入（支持默认值）"""
-    child_id: str = Field(default="default_child", description="孩子ID")
-    trigger_type: str = Field(default="conversation", description="触发类型")
+    """保存记忆包装节点输入"""
+    child_id: str = Field(..., description="孩子ID")
+    trigger_type: str = Field(..., description="触发类型")
     user_input_text: str = Field(default="", description="用户输入文本")
     recognized_text: str = Field(default="", description="识别出的文本")
     ai_response: str = Field(default="", description="AI响应")

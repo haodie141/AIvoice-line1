@@ -36,34 +36,16 @@ from graphs.node import (
 
 # ============== 包装函数：使用独立的Input/Output类型 ==============
 def wrap_load_memory(
-    state: LoadMemoryWrapInput,
-    config: RunnableConfig,
+    state: LoadMemoryWrapInput, 
+    config: RunnableConfig, 
     runtime: Runtime[Context]
 ) -> LoadMemoryWrapOutput:
-    """加载长期记忆（支持自动语音识别）"""
-    ctx = runtime.context
-    
+    """加载长期记忆"""
     node_input = LongTermMemoryInput(
         child_id=state.child_id,
         action_type="load"
     )
     node_output: LongTermMemoryOutput = long_term_memory_node(node_input, config, runtime)
-    
-    # 如果有音频输入但没有文本，自动进行语音识别
-    recognized_text = state.user_input_text
-    if state.user_input_audio and not state.user_input_text:
-        try:
-            from coze_coding_dev_sdk import ASRClient
-            asr_client = ASRClient(ctx=ctx)
-            text, _ = asr_client.recognize(
-                uid=f"{state.child_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                url=state.user_input_audio.url
-            )
-            recognized_text = text
-            print(f"🎤 语音识别成功：{recognized_text}")
-        except Exception as e:
-            print(f"⚠️ 语音识别失败：{e}")
-            recognized_text = state.user_input_text
     
     return LoadMemoryWrapOutput(
         child_id=state.child_id,
@@ -71,7 +53,7 @@ def wrap_load_memory(
         child_age=state.child_age,
         child_interests=state.child_interests,
         trigger_type=state.trigger_type,
-        user_input_text=recognized_text,  # 使用识别后的文本
+        user_input_text=state.user_input_text,
         user_input_audio=state.user_input_audio,
         homework_list=state.homework_list,
         conversation_history=node_output.conversation_history,
