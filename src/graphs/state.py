@@ -43,9 +43,9 @@ class GraphInput(BaseModel):
     child_name: str = Field(default="小朋友", description="孩子姓名（默认：小朋友）")
     child_age: int = Field(default=8, description="孩子年龄（默认：8岁）")
     child_interests: List[str] = Field(default=["阅读", "游戏"], description="孩子兴趣爱好（默认：阅读、游戏）")
-    trigger_type: Literal["conversation", "practice", "care", "remind", "realtime_call"] = Field(
-        default="realtime_call",
-        description="触发类型（默认：实时通话，低延迟模式）"
+    trigger_type: Literal["conversation", "practice", "care", "remind"] = Field(
+        default="conversation", 
+        description="触发类型（默认：实时对话）"
     )
     user_input_text: str = Field(default="", description="用户输入文本（可选）")
     user_input_audio: Optional[File] = Field(default=None, description="用户输入音频（推荐）")
@@ -142,21 +142,6 @@ class VoiceSynthesisOutput(BaseModel):
     """语音合成节点输出"""
     audio_url: str = Field(..., description="生成的音频URL")
     audio_size: int = Field(default=0, description="音频大小")
-
-# ============== 实时通话快速节点（低延迟专用）=============
-class RealtimeCallInput(BaseModel):
-    """实时通话快速节点输入（支持默认值）"""
-    user_input_audio: Optional[File] = Field(default=None, description="用户输入音频（优先）")
-    user_input_text: str = Field(default="", description="用户输入文本（备用）")
-    child_name: str = Field(default="小朋友", description="孩子姓名")
-    child_age: int = Field(default=8, description="孩子年龄")
-    child_id: str = Field(default="default_child", description="孩子ID")
-
-class RealtimeCallOutput(BaseModel):
-    """实时通话快速节点输出"""
-    ai_response: str = Field(default="", description="AI文本响应")
-    ai_response_audio: str = Field(default="", description="AI音频响应URL")
-    recognized_text: str = Field(default="", description="识别出的用户语音文本")
 
 # ============== 条件判断节点 ==============
 class RouteDecisionInput(BaseModel):

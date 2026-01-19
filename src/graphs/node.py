@@ -17,8 +17,7 @@ from graphs.state import (
     SpeakingPracticeInput, SpeakingPracticeOutput,
     RealtimeConversationInput, RealtimeConversationOutput,
     VoiceSynthesisInput, VoiceSynthesisOutput,
-    RouteDecisionInput,
-    RealtimeCallInput, RealtimeCallOutput
+    RouteDecisionInput
 )
 
 
@@ -408,110 +407,5 @@ def route_decision(state: RouteDecisionInput) -> str:
         return "口语练习"
     elif state.trigger_type == "conversation":
         return "实时对话"
-    elif state.trigger_type == "realtime_call":
-        return "实时通话"
     else:
         return "实时对话"  # 默认分支
-
-
-# ============== 实时通话快速节点（低延迟专用）=============
-def realtime_call_fast_node(
-    state: RealtimeCallInput,  # 使用RealtimeCallInput
-    config: RunnableConfig,
-    runtime: Runtime[Context]
-) -> RealtimeCallOutput:
-    """
-    title: 实时通话快速节点
-    desc: 整合ASR+LLM+TTS，专为实时通话优化，最小化延迟
-    integrations: 语音大模型, 大语言模型
-    """
-    from coze_coding_dev_sdk import ASRClient, LLMClient, TTSClient
-
-    ctx = runtime.context
-
-    # ============== 步骤1: 语音识别（ASR）=============
-    user_text = state.user_input_text
-
-    # 如果有音频输入且没有文本，进行语音识别
-    if state.user_input_audio and not user_text:
-        asr_client = ASRClient(ctx=ctx)
-        try:
-            text, _ = asr_client.recognize(
-                uid=f"realtime_{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                url=state.user_input_audio.url
-            )
-            user_text = text
-            print(f"🎤 ASR识别成功: {user_text}")
-        except Exception as e:
-            print(f"⚠️ ASR识别失败: {e}")
-    
-    if not user_text:
-        user_text = "你好"
-    
-    # ============== 步骤2: 大模型生成（LLM）=============
-    llm_client = LLMClient(ctx=ctx)
-    
-    # 获取当前时间信息
-    current_time = datetime.now()
-    time_of_day = "早上" if current_time.hour < 12 else "下午" if current_time.hour < 18 else "晚上"
-    
-    # 简化的提示词，减少token数量
-    simple_prompt = f"""你是{state.child_name}的好朋友，{state.child_age}岁。
-
-当前时间：{time_of_day}
-孩子说：{user_text}
-
-请用简单、友好的语言回复{state.child_age}岁的孩子。保持温暖和关爱。
-
-重要：
-- 只输出对话内容
-- 不要包含动作描述（如微笑、点头等）
-- 不要使用表情符号
-- 回复要简短精炼（50-100字）
-- 直接回答问题或回应
-"""
-    
-    messages = [
-        HumanMessage(content=simple_prompt)
-    ]
-    
-    # 使用低延迟配置
-    response = llm_client.invoke(
-        messages=messages,
-        model="doubao-seed-1-8-251228",
-        temperature=0.7,  # 稍高温度，更自然
-        max_tokens=150    # 限制输出长度，减少延迟
-    )
-    
-    ai_response = response.content if isinstance(response.content, str) else str(response.content)
-    ai_response = ai_response.strip()
-    print(f"🤖 LLM生成: {ai_response}")
-    
-    # ============== 步骤3: 语音合成（TTS）=============
-    tts_client = TTSClient(ctx=ctx)
-    
-    # 使用快速TTS配置
-    # 选择低延迟音色
-    if state.child_age <= 12:
-        voice_id = "zh_female_xueayi_saturn_bigtts"  # 儿童音色
-    else:
-        voice_id = "zh_female_xiaohe_uranus_bigtts"  # 默认女声
-    
-    # 低延迟配置
-    audio_url, audio_size = tts_client.synthesize(
-        uid=f"realtime_{datetime.now().strftime('%Y%m%d%H%M%S')}",
-        text=ai_response,
-        speaker=voice_id,
-        audio_format="mp3",
-        sample_rate=16000,   # 降低采样率以减少延迟
-        speech_rate=10,      # 标准语速
-        loudness_rate=10     # 提高音量
-    )
-    
-    print(f"🔊 TTS合成完成: {audio_url}")
-    
-    return RealtimeCallOutput(
-        ai_response=ai_response,
-        ai_response_audio=audio_url,
-        recognized_text=user_text
-    )
