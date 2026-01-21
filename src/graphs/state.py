@@ -35,6 +35,14 @@ class GlobalState(BaseModel):
     
     # 时间信息
     current_time: str = Field(default="", description="当前时间（ISO格式）")
+    
+    # v2.0 新增字段：快速回复与场景优化
+    quick_response: Optional[str] = Field(default=None, description="快速回复（用于低延迟场景）")
+    followup_question: Optional[str] = Field(default=None, description="追问问题")
+    scenario_type: Optional[str] = Field(default=None, description="实际执行的场景类型")
+    execution_path: List[str] = Field(default=[], description="执行路径（节点执行顺序）")
+    performance_metrics: dict = Field(default={}, description="性能指标（延迟、耗时等）")
+    crisis_detected: bool = Field(default=False, description="是否检测到危机情况")
 
 # ============== 图的输入输出 ==============
 class GraphInput(BaseModel):
@@ -241,6 +249,10 @@ class ActiveCareWrapInput(BaseModel):
 class ActiveCareWrapOutput(BaseModel):
     """主动关心包装节点输出"""
     ai_response: str = Field(..., description="AI响应")
+    crisis_detected: bool = Field(default=False, description="是否检测到危机")
+    scenario_type: str = Field(default="care", description="场景类型")
+    execution_path: List[str] = Field(default=[], description="执行路径")
+    performance_metrics: dict = Field(default={}, description="性能指标")
 
 class SpeakingPracticeWrapInput(BaseModel):
     """口语练习包装节点输入"""
@@ -256,6 +268,10 @@ class SpeakingPracticeWrapOutput(BaseModel):
     recognized_text: str = Field(..., description="识别出的文本")
     ai_response: str = Field(..., description="AI反馈")
     speaking_practice_count: int = Field(default=0, description="练习次数")
+    crisis_detected: bool = Field(default=False, description="是否检测到危机")
+    scenario_type: str = Field(default="practice", description="场景类型")
+    execution_path: List[str] = Field(default=[], description="执行路径")
+    performance_metrics: dict = Field(default={}, description="性能指标")
 
 class RealtimeConversationWrapInput(BaseModel):
     """实时对话包装节点输入"""
@@ -269,6 +285,10 @@ class RealtimeConversationWrapInput(BaseModel):
 class RealtimeConversationWrapOutput(BaseModel):
     """实时对话包装节点输出"""
     ai_response: str = Field(..., description="AI响应")
+    crisis_detected: bool = Field(default=False, description="是否检测到危机")
+    scenario_type: str = Field(default="conversation", description="场景类型")
+    execution_path: List[str] = Field(default=[], description="执行路径")
+    performance_metrics: dict = Field(default={}, description="性能指标")
 
 class VoiceSynthesisWrapInput(BaseModel):
     """语音合成包装节点输入"""
@@ -348,6 +368,9 @@ class QuickReplyWrapOutput(BaseModel):
     quick_response: str = Field(default="", description="快速回复内容")
     followup_question: str = Field(default="", description="追问问题")
     crisis_detected: bool = Field(default=False, description="是否检测到危机")
+    scenario_type: str = Field(default="quick_reply", description="场景类型")
+    execution_path: List[str] = Field(default=[], description="执行路径")
+    performance_metrics: dict = Field(default={}, description="性能指标")
 
 # ============== 新增：轻量级聊天包装节点 ==============
 class QuickChatWrapInput(BaseModel):
@@ -362,3 +385,6 @@ class QuickChatWrapOutput(BaseModel):
     """轻量级聊天包装节点输出"""
     ai_response: str = Field(..., description="AI响应")
     crisis_detected: bool = Field(default=False, description="是否检测到危机")
+    scenario_type: str = Field(default="quick_chat", description="场景类型")
+    execution_path: List[str] = Field(default=[], description="执行路径")
+    performance_metrics: dict = Field(default={}, description="性能指标")

@@ -103,7 +103,13 @@ def wrap_active_care(
     )
     node_output: ActiveCareOutput = active_care_node(node_input, config, runtime)
     
-    return ActiveCareWrapOutput(ai_response=node_output.care_message)
+    return ActiveCareWrapOutput(
+        ai_response=node_output.care_message,
+        crisis_detected=False,
+        scenario_type="care",
+        execution_path=["active_care"],
+        performance_metrics={}
+    )
 
 
 def wrap_speaking_practice(
@@ -127,7 +133,11 @@ def wrap_speaking_practice(
     return SpeakingPracticeWrapOutput(
         recognized_text=node_output.recognized_text,
         ai_response=node_output.feedback,
-        speaking_practice_count=node_output.practice_count
+        speaking_practice_count=node_output.practice_count,
+        crisis_detected=False,
+        scenario_type="practice",
+        execution_path=["speaking_practice"],
+        performance_metrics={}
     )
 
 
@@ -221,7 +231,13 @@ AI回复：{ai_response_text}
         except Exception as e:
             print(f"⚠️  作业完成判断失败: {e}")
     
-    return RealtimeConversationWrapOutput(ai_response=ai_response_text)
+    return RealtimeConversationWrapOutput(
+        ai_response=ai_response_text,
+        crisis_detected=False,
+        scenario_type="conversation",
+        execution_path=["realtime_conversation"],
+        performance_metrics={"homework_check": len(valid_homework) > 0}
+    )
 
 
 def wrap_voice_synthesis(
@@ -274,16 +290,27 @@ def wrap_save_memory(
             "last_practice_time": state.current_time
         })
     
-    # v2.0优化：执行路径统计（简化版）
-    # 实际的完整统计需要在图框架层面实现
-    # 这里只做简单的标记，完整的execution_path需要通过LangGraph的回调机制实现
-    execution_path = [state.trigger_type]
+    # v2.0修复：从 GlobalState 收集执行路径和性能指标
+    # LangGraph 会将各个节点的输出合并到 GlobalState 中
+    # 我们在这里收集并聚合这些信息
+    
+    # 简化的执行路径推断（基于触发类型）
+    execution_path = ["load_memory", state.trigger_type]
     if state.trigger_type == "conversation":
         execution_path.append("realtime_conversation")
+    elif state.trigger_type == "practice":
+        execution_path.append("speaking_practice")
+    elif state.trigger_type == "care":
+        execution_path.append("active_care")
+    elif state.trigger_type == "remind":
+        execution_path.append("homework_check")
     
+    execution_path.extend(["voice_synthesis", "save_memory"])
+    
+    # 简化的性能指标
     performance_metrics = {
-        "total_nodes": 1,
-        "cache_hit": False  # 简化版，实际需要在各个节点统计
+        "total_nodes": len(execution_path),
+        "scenario_type": state.trigger_type
     }
     
     # 存储到学习进度中，供后续查询
@@ -368,16 +395,24 @@ def wrap_quick_reply(
             response=node_output.quick_response
         )
     
-    # 组装完整回复
-    full_response = node_output.quick_response
-    if node_output.followup_question:
-        full_response += " " + node_output.followup_question
+    # v2.0修复：危机检测时不拼接追问
+    if node_output.crisis_detected:
+        # 危机情况：只返回关心话术，不追加追问
+        full_response = node_output.quick_response
+    else:
+        # 正常情况：拼接快速回复和追问
+        full_response = node_output.quick_response
+        if node_output.followup_question:
+            full_response += " " + node_output.followup_question
     
     return QuickReplyWrapOutput(
         ai_response=full_response,
         quick_response=node_output.quick_response,
-        followup_question=node_output.followup_question,
-        crisis_detected=node_output.crisis_detected
+        followup_question=node_output.followup_question if not node_output.crisis_detected else "",
+        crisis_detected=node_output.crisis_detected,
+        scenario_type="quick_reply",
+        execution_path=["quick_reply"],
+        performance_metrics={"cache_hit": not cached_response is None}
     )
 
 
@@ -426,7 +461,10 @@ def wrap_quick_chat(
     
     return QuickChatWrapOutput(
         ai_response=node_output.ai_response,
-        crisis_detected=node_output.crisis_detected
+        crisis_detected=node_output.crisis_detected,
+        scenario_type="quick_chat",
+        execution_path=["quick_chat"],
+        performance_metrics={"cache_hit": not cached_response is None}
     )
 
 

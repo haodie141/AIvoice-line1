@@ -1136,6 +1136,14 @@ def detect_scenario_type(state: DetectScenarioInput) -> DetectScenarioOutput:
         "web_search": ["不用搜", "不需要", "别查", "随便说说"]
     }
     
+    # 危机关键词（优先级最高）
+    # 使用包含关系匹配，而不是精确匹配
+    crisis_keywords = ["不想活了", "活着", "没意思", "讨厌自己", "自杀", "想死", "没有希望", "绝望"]
+    # 注意："活着" 和 "没意思" 单独匹配可能误判，所以需要组合判断
+    # 这里使用精确匹配和部分匹配结合的方式
+    crisis_exact_keywords = ["不想活了", "讨厌自己", "想自杀", "想死", "没有希望", "绝望"]
+    crisis_partial_keywords = [("活着", "没意思")]  # 同时包含"活着"和"没意思"
+    
     # 正向关键词列表
     quick_reply_keywords = ["是谁", "是谁啊", "多少钱", "这是什么", "那是什么", "几个", "几岁", "多高", "多重"]
     homework_keywords = ["作业", "题目", "考试", "复习", "预习", "练习", "做完了", "做完了没"]
@@ -1144,6 +1152,27 @@ def detect_scenario_type(state: DetectScenarioInput) -> DetectScenarioOutput:
     
     scenario_type = "normal_conversation"
     confidence = 0.5
+    
+    # 0. 检查危机关键词（优先级最高）
+    # 如果检测到危机信号，强制路由到quick_reply（因为有危机检测能力）
+    
+    # 检查精确匹配的关键词
+    crisis_detected = any(kw in user_input for kw in crisis_exact_keywords)
+    
+    # 检查部分匹配的关键词（需要同时包含多个词）
+    if not crisis_detected:
+        for word_pair in crisis_partial_keywords:
+            if all(word in user_input for word in word_pair):
+                crisis_detected = True
+                break
+    
+    if crisis_detected:
+        scenario_type = "quick_reply"
+        confidence = 1.0
+        return DetectScenarioOutput(
+            scenario_type=scenario_type,
+            confidence=confidence
+        )
     
     # 1. 检查负向短语（负向覆盖）
     # 如果包含"不想做作业"，不归类为homework
