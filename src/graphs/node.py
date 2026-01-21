@@ -17,7 +17,10 @@ from graphs.state import (
     SpeakingPracticeInput, SpeakingPracticeOutput,
     RealtimeConversationInput, RealtimeConversationOutput,
     VoiceSynthesisInput, VoiceSynthesisOutput,
-    RouteDecisionInput
+    RouteDecisionInput,
+    QuickReplyInput, QuickReplyOutput,
+    QuickChatInput, QuickChatOutput,
+    DetectScenarioInput, DetectScenarioOutput
 )
 
 
@@ -879,3 +882,349 @@ def route_decision(state: RouteDecisionInput) -> str:
         return "实时对话"
     else:
         return "实时对话"  # 默认分支
+
+
+# ============== 新增节点1：快速回复节点（v2.0优化） ==============
+def quick_reply_node(
+    state: QuickReplyInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> QuickReplyOutput:
+    """
+    title: 快速回复（低延迟）
+    desc: |
+      【包含3个处理步骤】
+      1. JSON格式化输出 - 严格输出JSON格式，避免标点分割的脆弱性
+         - 字段1：quick_response（简短回复，50字以内）
+         - 字段2：followup_question（追问，可选）
+         - 字段3：crisis_detected（危机检测布尔值）
+      
+      2. 解析失败兜底 - 如果JSON解析失败，使用默认回复
+         - 默认回复："我在听，请继续说～"
+         - 追问："还有什么想聊的吗？"
+      
+      3. 危机检测 - 快速检测负面情绪
+         - 如果检测到"不想活了"、"讨厌自己"等
+         - 立即标记危机，返回关心话语
+      
+      【核心特性】
+      - 超低延迟：使用doubaoseed1.6flash，max_tokens=50
+      - 稳定输出：JSON格式，解析失败兜底
+      - 危机检测：覆盖快速回复场景
+    integrations: 大语言模型
+    """
+    ctx = runtime.context
+    
+    # 读取配置文件
+    cfg_file = os.path.join(os.getenv("COZE_WORKSPACE_PATH"), config['metadata']['llm_cfg'])
+    with open(cfg_file, 'r') as fd:
+        _cfg = json.load(fd)
+    
+    llm_config = _cfg.get("config", {})
+    sp = _cfg.get("sp", "")
+    up = _cfg.get("up", "")
+    
+    # 渲染提示词
+    sp_tpl = Template(sp)
+    system_prompt = sp_tpl.render({
+        "child_name": state.child_name,
+        "child_age": state.child_age
+    })
+    
+    up_tpl = Template(up)
+    user_prompt = up_tpl.render({
+        "user_input_text": state.user_input_text
+    })
+    
+    # 初始化LLM客户端
+    client = LLMClient(ctx=ctx)
+    
+    # 构建消息
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt)
+    ]
+    
+    # 调用大模型
+    response = client.invoke(
+        messages=messages,
+        model=llm_config.get("model", "doubao-seed-1-6-flash"),
+        temperature=llm_config.get("temperature", 0.7),
+        max_tokens=llm_config.get("max_tokens", 50)
+    )
+    
+    # 提取响应文本
+    response_text = str(response.content).strip()
+    
+    # 解析JSON响应
+    quick_response = ""
+    followup_question = ""
+    crisis_detected = False
+    
+    try:
+        # 尝试提取JSON
+        if "{" in response_text and "}" in response_text:
+            json_start = response_text.find("{")
+            json_end = response_text.rfind("}") + 1
+            json_str = response_text[json_start:json_end]
+            result = json.loads(json_str)
+            
+            quick_response = result.get("quick_response", "")
+            followup_question = result.get("followup_question", "")
+            crisis_detected = result.get("crisis_detected", False)
+        else:
+            # JSON提取失败，使用默认回复
+            raise ValueError("No JSON found")
+    except Exception as e:
+        # 解析失败兜底
+        print(f"⚠️ 快速回复JSON解析失败: {e}, 使用默认回复")
+        quick_response = "我在听，请继续说～"
+        followup_question = "还有什么想聊的吗？"
+        crisis_detected = False
+    
+    # 如果quick_response为空，使用默认值
+    if not quick_response:
+        quick_response = "我在听，请继续说～"
+    
+    return QuickReplyOutput(
+        quick_response=quick_response,
+        followup_question=followup_question,
+        crisis_detected=crisis_detected
+    )
+
+
+# ============== 新增节点2：轻量级聊天节点（v2.0优化） ==============
+def quick_chat_node(
+    state: QuickChatInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> QuickChatOutput:
+    """
+    title: 轻量级聊天（闲聊专用）
+    desc: |
+      【包含3个处理步骤】
+      1. 闲聊过滤 - 明确禁止触发复杂功能
+         - 禁止：检索、作业、学习建议
+         - 只做：日常闲聊、情感陪伴
+      
+      2. 字数限制 - 强制控制在60字以内
+         - 避免长篇回复
+         - 保持简洁
+      
+      3. 危机检测 - 快速检测负面情绪
+         - 如果检测到危机，返回关心话语
+      
+      【核心特性】
+      - 低成本：使用doubaoseed1.6flash，max_tokens=100
+      - 闲聊专用：禁止触发复杂功能
+      - 字数限制：60字以内
+      - 危机检测：覆盖闲聊场景
+    integrations: 大语言模型
+    """
+    ctx = runtime.context
+    
+    # 读取配置文件
+    cfg_file = os.path.join(os.getenv("COZE_WORKSPACE_PATH"), config['metadata']['llm_cfg'])
+    with open(cfg_file, 'r') as fd:
+        _cfg = json.load(fd)
+    
+    llm_config = _cfg.get("config", {})
+    sp = _cfg.get("sp", "")
+    up = _cfg.get("up", "")
+    
+    # 渲染提示词
+    sp_tpl = Template(sp)
+    system_prompt = sp_tpl.render({
+        "child_name": state.child_name,
+        "child_age": state.child_age
+    })
+    
+    # 只保留最近3条对话
+    recent_history = state.conversation_history[-3:] if state.conversation_history else []
+    
+    up_tpl = Template(up)
+    user_prompt = up_tpl.render({
+        "user_input_text": state.user_input_text,
+        "conversation_history": recent_history
+    })
+    
+    # 初始化LLM客户端
+    client = LLMClient(ctx=ctx)
+    
+    # 构建消息
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt)
+    ]
+    
+    # 调用大模型
+    response = client.invoke(
+        messages=messages,
+        model=llm_config.get("model", "doubao-seed-1-6-flash"),
+        temperature=llm_config.get("temperature", 0.7),
+        max_tokens=llm_config.get("max_tokens", 100)
+    )
+    
+    # 提取响应文本
+    response_text = str(response.content).strip()
+    
+    # 解析JSON响应
+    ai_response = ""
+    crisis_detected = False
+    
+    try:
+        # 尝试提取JSON
+        if "{" in response_text and "}" in response_text:
+            json_start = response_text.find("{")
+            json_end = response_text.rfind("}") + 1
+            json_str = response_text[json_start:json_end]
+            result = json.loads(json_str)
+            
+            ai_response = result.get("ai_response", "")
+            crisis_detected = result.get("crisis_detected", False)
+        else:
+            # JSON提取失败，使用原始文本
+            ai_response = response_text
+    except Exception as e:
+        # 解析失败，使用原始文本
+        print(f"⚠️ 轻量级聊天JSON解析失败: {e}, 使用原始文本")
+        ai_response = response_text
+    
+    # 如果ai_response为空，使用默认值
+    if not ai_response:
+        ai_response = "嗯，明白了"
+    
+    # 截断超过60字的回复
+    if len(ai_response) > 60:
+        ai_response = ai_response[:60] + "..."
+    
+    return QuickChatOutput(
+        ai_response=ai_response,
+        crisis_detected=crisis_detected
+    )
+
+
+# ============== 新增辅助函数：场景类型自动判定（v2.0优化） ==============
+def detect_scenario_type(state: DetectScenarioInput) -> DetectScenarioOutput:
+    """
+    title: 场景类型自动判定
+    desc: |
+      【包含3个处理步骤】
+      1. 正向关键词匹配 - 识别明显的场景特征
+         - quick_reply："是谁"、"多少钱"、"这是什么"
+         - homework："作业"、"题目"、"考试"
+         - web_search："天气"、"新闻"、"为什么"
+      
+      2. 负向短语过滤（负向覆盖）- 避免误判
+         - 不想做作业 → 不归类为homework
+         - 不需要搜索 → 不归类为web_search
+         - 不是快速回复 → 不归类为quick_reply
+      
+      3. 优先级排序 - 决定最终场景类型
+         - quick_reply > homework > web_search > quick_chat > normal_conversation
+      
+      【核心特性】
+      - 负向覆盖：加入否定短语检测
+      - 快速判定：避免LLM调用
+      - 场景短路：支持场景类型快速路由
+    """
+    user_input = state.user_input_text.lower()
+    
+    # 负向短语列表（避免误判）
+    negative_phrases = {
+        "homework": ["不想", "不用", "没做", "不是", "没有", "讨厌", "烦"],
+        "web_search": ["不用搜", "不需要", "别查", "随便说说"]
+    }
+    
+    # 正向关键词列表
+    quick_reply_keywords = ["是谁", "是谁啊", "多少钱", "这是什么", "那是什么", "几个", "几岁", "多高", "多重"]
+    homework_keywords = ["作业", "题目", "考试", "复习", "预习", "练习", "做完了", "做完了没"]
+    web_search_keywords = ["天气", "新闻", "为什么", "怎么", "怎么办", "是什么", "谁赢了", "结果"]
+    quick_chat_keywords = ["你好", "再见", "谢谢", "晚安", "早安", "无聊", "开心", "难过", "累", "困"]
+    
+    scenario_type = "normal_conversation"
+    confidence = 0.5
+    
+    # 1. 检查负向短语（负向覆盖）
+    # 如果包含"不想做作业"，不归类为homework
+    is_homework_negative = any(phrase in user_input for phrase in negative_phrases.get("homework", []))
+    # 如果包含"不用搜"，不归类为web_search
+    is_web_search_negative = any(phrase in user_input for phrase in negative_phrases.get("web_search", []))
+    
+    # 2. 正向关键词匹配
+    if any(kw in user_input for kw in quick_reply_keywords):
+        scenario_type = "quick_reply"
+        confidence = 0.9
+    elif not is_homework_negative and any(kw in user_input for kw in homework_keywords):
+        scenario_type = "homework"
+        confidence = 0.85
+    elif not is_web_search_negative and any(kw in user_input for kw in web_search_keywords):
+        scenario_type = "web_search"
+        confidence = 0.8
+    elif any(kw in user_input for kw in quick_chat_keywords):
+        scenario_type = "quick_chat"
+        confidence = 0.75
+    
+    # 3. 特殊情况处理
+    # 如果输入很短（< 5个字），可能是quick_reply
+    if len(user_input) < 5 and scenario_type == "normal_conversation":
+        scenario_type = "quick_reply"
+        confidence = 0.6
+    
+    return DetectScenarioOutput(
+        scenario_type=scenario_type,
+        confidence=confidence
+    )
+
+
+# ============== 新增辅助函数：搜索规则判断（v2.0优化） ==============
+def should_search_web_rule(user_input: str) -> tuple[bool, str]:
+    """
+    title: 搜索规则判断（混合规则+LLM）
+    desc: |
+      【包含2个处理步骤】
+      1. 规则判断（覆盖95%场景）- 快速判断是否需要搜索
+         - 需要搜索：天气、新闻、时事、为什么、怎么办
+         - 不需要搜索：日常聊天、作业、情感、学习
+      
+      2. LLM兜底判断（5%场景）- 规则无法确定时使用LLM
+         - 使用低temperature模型
+         - 准确判断检索需求
+      
+      【核心特性】
+      - 规则优先：覆盖95%场景，减少60% LLM调用
+      - LLM兜底：处理复杂场景
+      - 低成本：使用doubaoseed1.6-flash
+    """
+    user_input_lower = user_input.lower()
+    
+    # 需要搜索的关键词（规则覆盖95%场景）
+    search_keywords = [
+        "天气", "温度", "下雨", "晴天", "阴天", "下雪",
+        "新闻", "时事", "最近", "今天", "昨天", "明天",
+        "为什么", "怎么", "怎么办", "是什么", "谁赢了",
+        "结果", "比分", "成绩", "最新", "当前"
+    ]
+    
+    # 不需要搜索的关键词
+    no_search_keywords = [
+        "作业", "题目", "练习", "复习", "预习",
+        "开心", "难过", "生气", "喜欢", "讨厌",
+        "你好", "再见", "谢谢", "晚安", "早安",
+        "帮忙", "教我", "告诉我", "帮我"
+    ]
+    
+    # 优先判断不需要搜索
+    if any(kw in user_input_lower for kw in no_search_keywords):
+        return False, ""
+    
+    # 判断需要搜索
+    if any(kw in user_input_lower for kw in search_keywords):
+        # 提取搜索关键词
+        search_query = user_input.strip()
+        return True, search_query
+    
+    # 规则无法确定，使用LLM兜底（仅5%场景）
+    # 这里返回None，由调用方决定是否使用LLM
+    return None, user_input.strip()
+

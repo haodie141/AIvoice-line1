@@ -18,6 +18,7 @@ class MemoryStore:
         """初始化（由于单例模式，实际只会在第一次创建时调用）"""
         if not hasattr(self, 'initialized'):
             self._data: Dict[str, Dict[str, Any]] = {}
+            self._short_cache: Dict[str, Dict[str, Any]] = {}  # 短期缓存（1-2分钟）
             self.initialized = True
     
     @classmethod
@@ -397,6 +398,142 @@ class MemoryStore:
         mastered = sum(1 for kp in knowledge_points if kp.get("mastery_level", 0) >= 4)
         learning = sum(1 for kp in knowledge_points if 2 <= kp.get("mastery_level", 0) < 4)
         need_review = len(self.get_due_for_review(child_id, limit=100))
+
+    # ============== 短期缓存系统（v2.0优化） ==============
+    
+    def _get_cache_key(self, scenario: str, query: str) -> str:
+        """生成缓存键"""
+        import hashlib
+        key_str = f"{scenario}:{query.lower().strip()}"
+        return hashlib.md5(key_str.encode()).hexdigest()
+    
+    def get_cached_response(
+        self, 
+        scenario: str, 
+        query: str,
+        cache_duration: int = 90
+    ) -> Optional[str]:
+        """
+        获取缓存的响应
+        
+        Args:
+            scenario: 场景类型（如quick_reply, quick_chat）
+            query: 用户输入
+            cache_duration: 缓存时长（秒），默认90秒（1.5分钟）
+        
+        Returns:
+            缓存的响应，如果过期或不存在则返回None
+        """
+        cache_key = self._get_cache_key(scenario, query)
+        cached_item = self._short_cache.get(cache_key)
+        
+        if not cached_item:
+            return None
+        
+        # 检查缓存是否过期
+        cached_time_str = cached_item.get("timestamp", "")
+        if not cached_time_str:
+            return None
+        
+        try:
+            cached_time = datetime.fromisoformat(cached_time_str)
+            now = datetime.now()
+            
+            if (now - cached_time).total_seconds() > cache_duration:
+                # 缓存过期，删除
+                del self._short_cache[cache_key]
+                return None
+            
+            # 返回缓存的响应
+            return cached_item.get("response")
+        except (ValueError, TypeError):
+            return None
+    
+    def cache_response(
+        self, 
+        scenario: str, 
+        query: str, 
+        response: str
+    ) -> None:
+        """
+        缓存响应
+        
+        Args:
+            scenario: 场景类型
+            query: 用户输入
+            response: 响应内容
+        """
+        cache_key = self._get_cache_key(scenario, query)
+        
+        self._short_cache[cache_key] = {
+            "response": response,
+            "timestamp": datetime.now().isoformat(),
+            "scenario": scenario,
+            "query": query
+        }
+        
+        # 限制缓存大小（最多1000条）
+        if len(self._short_cache) > 1000:
+            # 删除最旧的缓存（按时间排序）
+            sorted_items = sorted(
+                self._short_cache.items(),
+                key=lambda x: x[1].get("timestamp", "")
+            )
+            # 删除最旧的10%
+            remove_count = len(sorted_items) // 10
+            for key, _ in sorted_items[:remove_count]:
+                del self._short_cache[key]
+    
+    def clear_expired_cache(self, max_age_seconds: int = 180) -> int:
+        """
+        清理过期缓存
+        
+        Args:
+            max_age_seconds: 最大缓存时长（秒），默认180秒（3分钟）
+        
+        Returns:
+            删除的缓存数量
+        """
+        now = datetime.now()
+        remove_count = 0
+        expired_keys = []
+        
+        for cache_key, cache_item in self._short_cache.items():
+            timestamp_str = cache_item.get("timestamp", "")
+            if not timestamp_str:
+                continue
+            
+            try:
+                cached_time = datetime.fromisoformat(timestamp_str)
+                if (now - cached_time).total_seconds() > max_age_seconds:
+                    expired_keys.append(cache_key)
+            except (ValueError, TypeError):
+                continue
+        
+        # 删除过期缓存
+        for key in expired_keys:
+            del self._short_cache[key]
+            remove_count += 1
+        
+        return remove_count
+    
+    def record_homework_check(self, child_id: str) -> None:
+        """记录作业检查时间（用于降频机制）"""
+        child_data = self._get_child_data(child_id)
+        child_data["last_homework_check"] = datetime.now().isoformat()
+    
+    def get_last_homework_check(self, child_id: str) -> Optional[datetime]:
+        """获取最后检查作业的时间"""
+        child_data = self._get_child_data(child_id)
+        last_check_str = child_data.get("last_homework_check", "")
+        
+        if not last_check_str:
+            return None
+        
+        try:
+            return datetime.fromisoformat(last_check_str)
+        except (ValueError, TypeError):
+            return None
         
         return {
             "total": total,

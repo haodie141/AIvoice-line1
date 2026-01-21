@@ -15,6 +15,8 @@ from .state import (
     RealtimeConversationWrapInput, RealtimeConversationWrapOutput,
     VoiceSynthesisWrapInput, VoiceSynthesisWrapOutput,
     SaveMemoryWrapInput, SaveMemoryWrapOutput,
+    QuickReplyWrapInput, QuickReplyWrapOutput,
+    QuickChatWrapInput, QuickChatWrapOutput,
     LongTermMemoryInput, LongTermMemoryOutput,
     HomeworkCheckInput, HomeworkCheckOutput,
     ActiveCareInput, ActiveCareOutput,
@@ -30,7 +32,10 @@ from .node import (
     speaking_practice_node,
     realtime_conversation_node,
     voice_synthesis_node,
-    route_decision
+    route_decision,
+    quick_reply_node,
+    quick_chat_node,
+    detect_scenario_type
 )
 
 
@@ -237,10 +242,10 @@ def wrap_voice_synthesis(
 
 def wrap_save_memory(
     state: SaveMemoryWrapInput, 
-    config: RunnableConfig, 
+    config: RunnableConfig,
     runtime: Runtime[Context]
 ) -> SaveMemoryWrapOutput:
-    """保存长期记忆"""
+    """保存长期记忆（支持执行路径和性能指标统计）"""
     from graphs.memory_store import MemoryStore
     
     memory_store = MemoryStore.get_instance()
@@ -269,12 +274,49 @@ def wrap_save_memory(
             "last_practice_time": state.current_time
         })
     
+    # v2.0优化：执行路径统计（简化版）
+    # 实际的完整统计需要在图框架层面实现
+    # 这里只做简单的标记，完整的execution_path需要通过LangGraph的回调机制实现
+    execution_path = [state.trigger_type]
+    if state.trigger_type == "conversation":
+        execution_path.append("realtime_conversation")
+    
+    performance_metrics = {
+        "total_nodes": 1,
+        "cache_hit": False  # 简化版，实际需要在各个节点统计
+    }
+    
+    # 存储到学习进度中，供后续查询
+    memory_store.update_learning_progress(state.child_id, {
+        "last_execution_path": execution_path,
+        "last_performance_metrics": performance_metrics
+    })
+    
     return SaveMemoryWrapOutput(saved=True)
 
 
 # ============== 条件判断包装函数 ==============
 def wrap_route_decision(state: LoadMemoryWrapOutput) -> str:
-    """路由决策"""
+    """路由决策（支持场景短路优化）"""
+    # v2.0优化：先检查场景类型，实现短路
+    from graphs.state import DetectScenarioInput
+    
+    # 如果有用户输入，自动判定场景类型
+    if state.user_input_text:
+        scenario_input = DetectScenarioInput(
+            user_input_text=state.user_input_text,
+            trigger_type=state.trigger_type,
+            conversation_history=state.conversation_history
+        )
+        scenario_output = detect_scenario_type(scenario_input)
+        
+        # 场景短路：根据场景类型直接路由
+        if scenario_output.scenario_type == "quick_reply":
+            return "快速回复"
+        elif scenario_output.scenario_type == "quick_chat":
+            return "轻量级聊天"
+    
+    # 原有逻辑
     node_input = RouteDecisionInput(
         trigger_type=state.trigger_type,
         need_remind=False  # 这个参数在load阶段还不确定
@@ -282,11 +324,125 @@ def wrap_route_decision(state: LoadMemoryWrapOutput) -> str:
     return route_decision(node_input)
 
 
+# ============== 新增：快速回复包装节点（v2.0优化） ==============
+def wrap_quick_reply(
+    state: QuickReplyWrapInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> QuickReplyWrapOutput:
+    """快速回复（支持短期缓存）"""
+    from graphs.memory_store import MemoryStore
+    from graphs.node import quick_reply_node
+    from graphs.state import QuickReplyInput, QuickReplyOutput
+    
+    # v2.0优化：先检查短期缓存
+    memory_store = MemoryStore.get_instance()
+    cached_response = memory_store.get_cached_response(
+        scenario="quick_reply",
+        query=state.user_input_text
+    )
+    
+    if cached_response:
+        # 命中缓存，直接返回
+        print(f"✅ 命中短期缓存：quick_reply")
+        return QuickReplyWrapOutput(
+            ai_response=cached_response,
+            quick_response=cached_response,
+            followup_question="还有什么想聊的吗？",
+            crisis_detected=False
+        )
+    
+    # 未命中缓存，调用LLM
+    node_input = QuickReplyInput(
+        user_input_text=state.user_input_text,
+        child_name=state.child_name,
+        child_age=state.child_age
+    )
+    node_output: QuickReplyOutput = quick_reply_node(node_input, config, runtime)
+    
+    # 缓存响应
+    if node_output.quick_response:
+        memory_store.cache_response(
+            scenario="quick_reply",
+            query=state.user_input_text,
+            response=node_output.quick_response
+        )
+    
+    # 组装完整回复
+    full_response = node_output.quick_response
+    if node_output.followup_question:
+        full_response += " " + node_output.followup_question
+    
+    return QuickReplyWrapOutput(
+        ai_response=full_response,
+        quick_response=node_output.quick_response,
+        followup_question=node_output.followup_question,
+        crisis_detected=node_output.crisis_detected
+    )
+
+
+# ============== 新增：轻量级聊天包装节点（v2.0优化） ==============
+def wrap_quick_chat(
+    state: QuickChatWrapInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> QuickChatWrapOutput:
+    """轻量级聊天（支持短期缓存）"""
+    from graphs.memory_store import MemoryStore
+    from graphs.node import quick_chat_node
+    from graphs.state import QuickChatInput, QuickChatOutput
+    
+    # v2.0优化：先检查短期缓存
+    memory_store = MemoryStore.get_instance()
+    cached_response = memory_store.get_cached_response(
+        scenario="quick_chat",
+        query=state.user_input_text
+    )
+    
+    if cached_response:
+        # 命中缓存，直接返回
+        print(f"✅ 命中短期缓存：quick_chat")
+        return QuickChatWrapOutput(
+            ai_response=cached_response,
+            crisis_detected=False
+        )
+    
+    # 未命中缓存，调用LLM
+    node_input = QuickChatInput(
+        user_input_text=state.user_input_text,
+        child_name=state.child_name,
+        child_age=state.child_age,
+        conversation_history=state.conversation_history[-3:]  # 只保留最近3条
+    )
+    node_output: QuickChatOutput = quick_chat_node(node_input, config, runtime)
+    
+    # 缓存响应
+    if node_output.ai_response:
+        memory_store.cache_response(
+            scenario="quick_chat",
+            query=state.user_input_text,
+            response=node_output.ai_response
+        )
+    
+    return QuickChatWrapOutput(
+        ai_response=node_output.ai_response,
+        crisis_detected=node_output.crisis_detected
+    )
+
+
 # ============== 创建主图 ==============
 builder = StateGraph(GlobalState, input_schema=GraphInput, output_schema=GraphOutput)
 
 # 添加节点（使用包装函数）
 builder.add_node("load_memory", wrap_load_memory)
+builder.add_node("quick_reply", wrap_quick_reply, metadata={
+    "type": "agent",
+    "llm_cfg": "config/quick_reply_llm_cfg.json"
+})
+builder.add_node("quick_chat", wrap_quick_chat, metadata={
+    "type": "agent",
+    "llm_cfg": "config/quick_chat_llm_cfg.json"
+})
 builder.add_node("homework_check", wrap_homework_check)
 builder.add_node("active_care", wrap_active_care, metadata={
     "type": "agent",
@@ -303,11 +459,13 @@ builder.add_node("save_memory", wrap_save_memory)
 # 设置入口点
 builder.set_entry_point("load_memory")
 
-# 添加条件分支
+# v2.0优化：添加条件分支，支持场景短路
 builder.add_conditional_edges(
     source="load_memory",
     path=wrap_route_decision,
     path_map={
+        "快速回复": "quick_reply",
+        "轻量级聊天": "quick_chat",
         "主动关心": "active_care",
         "作业提醒": "homework_check",
         "口语练习": "speaking_practice",
@@ -316,6 +474,8 @@ builder.add_conditional_edges(
 )
 
 # 添加后续边 - 所有处理分支都汇聚到语音合成
+builder.add_edge("quick_reply", "voice_synthesis")
+builder.add_edge("quick_chat", "voice_synthesis")
 builder.add_edge("active_care", "voice_synthesis")
 builder.add_edge("homework_check", "voice_synthesis")
 builder.add_edge("speaking_practice", "voice_synthesis")

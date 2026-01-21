@@ -50,6 +50,10 @@ class GraphInput(BaseModel):
     user_input_text: str = Field(default="", description="用户输入文本（可选）")
     user_input_audio: Optional[File] = Field(default=None, description="用户输入音频（可选）")
     homework_list: List[dict] = Field(default=[], description="作业列表（可选）")
+    scenario_type: Optional[Literal["quick_reply", "quick_chat", "homework", "web_search", "normal_conversation"]] = Field(
+        default=None,
+        description="场景类型（可选，用于场景短路优化）"
+    )
 
 class GraphOutput(BaseModel):
     """工作流输出"""
@@ -58,6 +62,12 @@ class GraphOutput(BaseModel):
     trigger_type: str = Field(..., description="触发类型")
     homework_status: str = Field(default="", description="作业状态")
     speaking_practice_count: int = Field(default=0, description="口语练习次数")
+    quick_response: Optional[str] = Field(default=None, description="快速回复（用于低延迟场景）")
+    followup_question: Optional[str] = Field(default=None, description="追问问题")
+    scenario_type: Optional[str] = Field(default=None, description="实际执行的场景类型")
+    execution_path: List[str] = Field(default=[], description="执行路径（节点执行顺序）")
+    performance_metrics: dict = Field(default={}, description="性能指标（延迟、耗时等）")
+    crisis_detected: bool = Field(default=False, description="是否检测到危机情况")
 
 # ============== 节点1：长期记忆节点 ==============
 class LongTermMemoryInput(BaseModel):
@@ -282,3 +292,73 @@ class SaveMemoryWrapInput(BaseModel):
 class SaveMemoryWrapOutput(BaseModel):
     """保存记忆包装节点输出"""
     saved: bool = Field(default=True, description="是否保存成功")
+
+# ============== 新增：场景类型判定节点 ==============
+class DetectScenarioInput(BaseModel):
+    """场景类型判定节点输入"""
+    user_input_text: str = Field(..., description="用户输入文本")
+    trigger_type: str = Field(..., description="触发类型")
+    conversation_history: List[dict] = Field(default=[], description="对话历史")
+
+class DetectScenarioOutput(BaseModel):
+    """场景类型判定节点输出"""
+    scenario_type: Literal["quick_reply", "quick_chat", "homework", "web_search", "normal_conversation"] = Field(
+        ...,
+        description="判定的场景类型"
+    )
+    confidence: float = Field(default=0.0, description="判断置信度")
+
+# ============== 新增：快速回复节点 ==============
+class QuickReplyInput(BaseModel):
+    """快速回复节点输入"""
+    user_input_text: str = Field(..., description="用户输入文本")
+    child_name: str = Field(..., description="孩子姓名")
+    child_age: int = Field(..., description="孩子年龄")
+
+class QuickReplyOutput(BaseModel):
+    """快速回复节点输出"""
+    quick_response: str = Field(..., description="快速回复内容（简短）")
+    followup_question: str = Field(default="", description="追问问题")
+    crisis_detected: bool = Field(default=False, description="是否检测到危机")
+
+# ============== 新增：轻量级聊天节点 ==============
+class QuickChatInput(BaseModel):
+    """轻量级聊天节点输入"""
+    user_input_text: str = Field(..., description="用户输入文本")
+    child_name: str = Field(..., description="孩子姓名")
+    child_age: int = Field(..., description="孩子年龄")
+    conversation_history: List[dict] = Field(default=[], description="对话历史（最近3条）")
+
+class QuickChatOutput(BaseModel):
+    """轻量级聊天节点输出"""
+    ai_response: str = Field(..., description="AI响应内容")
+    crisis_detected: bool = Field(default=False, description="是否检测到危机")
+
+# ============== 新增：快速回复包装节点 ==============
+class QuickReplyWrapInput(BaseModel):
+    """快速回复包装节点输入"""
+    child_id: str = Field(..., description="孩子ID")
+    child_name: str = Field(..., description="孩子姓名")
+    child_age: int = Field(..., description="孩子年龄")
+    user_input_text: str = Field(..., description="用户输入文本")
+
+class QuickReplyWrapOutput(BaseModel):
+    """快速回复包装节点输出"""
+    ai_response: str = Field(..., description="AI响应（快速回复）")
+    quick_response: str = Field(default="", description="快速回复内容")
+    followup_question: str = Field(default="", description="追问问题")
+    crisis_detected: bool = Field(default=False, description="是否检测到危机")
+
+# ============== 新增：轻量级聊天包装节点 ==============
+class QuickChatWrapInput(BaseModel):
+    """轻量级聊天包装节点输入"""
+    child_id: str = Field(..., description="孩子ID")
+    child_name: str = Field(..., description="孩子姓名")
+    child_age: int = Field(..., description="孩子年龄")
+    user_input_text: str = Field(..., description="用户输入文本")
+    conversation_history: List[dict] = Field(default=[], description="对话历史")
+
+class QuickChatWrapOutput(BaseModel):
+    """轻量级聊天包装节点输出"""
+    ai_response: str = Field(..., description="AI响应")
+    crisis_detected: bool = Field(default=False, description="是否检测到危机")
