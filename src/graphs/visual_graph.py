@@ -9,13 +9,11 @@ export COZE_VISUAL_MODE=detailed
 然后运行工作流，将使用可视化模式
 """
 
-from datetime import datetime
 from langgraph.graph import StateGraph, END
 from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
 from coze_coding_utils.runtime_ctx.context import Context
 
-from .memory_store import MemoryStore
 from .state import (
     GlobalState,
     GraphInput,
@@ -402,116 +400,116 @@ def create_visual_graph():
     # ============== 创建图 ==============
     builder = StateGraph(VisualGlobalState, input_schema=GraphInput, output_schema=GraphOutput)
     
-    # 添加公共节点（使用visual_前缀避免与graph.py冲突）
-    builder.add_node("visual_load_memory", wrap_load_memory_visual)
-
+    # 添加公共节点
+    builder.add_node("load_memory", wrap_load_memory_visual)
+    
     # 添加主动关心分支
-    builder.add_node("visual_active_care", wrap_active_care_visual, metadata={
+    builder.add_node("active_care", wrap_active_care_visual, metadata={
         "type": "agent",
         "llm_cfg": "config/active_care_llm_cfg.json"
     })
-
+    
     # 添加作业提醒分支
-    builder.add_node("visual_homework_check", wrap_homework_check_visual, metadata={
+    builder.add_node("homework_check", wrap_homework_check_visual, metadata={
         "type": "agent",
         "llm_cfg": "config/homework_check_llm_cfg.json"
     })
-
+    
     # ============== 添加口语练习分支（7个步骤） ==============
-    builder.add_node("visual_practice_asr", wrap_practice_asr, metadata={
+    builder.add_node("practice_asr", wrap_practice_asr, metadata={
         "title": "口语练习-语音识别",
         "desc": "将孩子说的话转换为文本"
     })
-    builder.add_node("visual_practice_review_check", wrap_practice_review_check, metadata={
+    builder.add_node("practice_review_check", wrap_practice_review_check, metadata={
         "title": "口语练习-复习检查",
         "desc": "检查是否有需要复习的知识点（间隔重复算法）"
     })
-    builder.add_node("visual_practice_scenario_select", wrap_practice_scenario_select, metadata={
+    builder.add_node("practice_scenario_select", wrap_practice_scenario_select, metadata={
         "title": "口语练习-场景选择",
         "desc": "根据孩子兴趣选择练习场景"
     })
-    builder.add_node("visual_practice_dialogue", wrap_practice_dialogue, metadata={
+    builder.add_node("practice_dialogue", wrap_practice_dialogue, metadata={
         "title": "口语练习-对话引擎",
         "desc": "四阶段对话：主动发起→苏格拉底式提问→追问延伸→总结反馈"
     })
-    builder.add_node("visual_practice_knowledge_extract", wrap_practice_knowledge_extract, metadata={
+    builder.add_node("practice_knowledge_extract", wrap_practice_knowledge_extract, metadata={
         "title": "口语练习-知识点识别",
         "desc": "自动识别新知识点（单词/概念）"
     })
-    builder.add_node("visual_practice_update_memory", wrap_practice_update_memory, metadata={
+    builder.add_node("practice_update_memory", wrap_practice_update_memory, metadata={
         "title": "口语练习-更新记忆",
         "desc": "更新学习进度和记忆（间隔重复算法）"
     })
-    builder.add_node("visual_practice_tts", wrap_practice_tts, metadata={
+    builder.add_node("practice_tts", wrap_practice_tts, metadata={
         "title": "口语练习-语音合成",
         "desc": "将AI回复转换为语音"
     })
-
+    
     # ============== 添加实时对话分支（5个步骤） ==============
-    builder.add_node("visual_realtime_search_judgment", wrap_realtime_search_judgment, metadata={
+    builder.add_node("realtime_search_judgment", wrap_realtime_search_judgment, metadata={
         "title": "实时对话-搜索判断",
         "desc": "判断是否需要联网搜索"
     })
-    builder.add_node("visual_realtime_web_search", wrap_realtime_web_search, metadata={
+    builder.add_node("realtime_web_search", wrap_realtime_web_search, metadata={
         "title": "实时对话-联网搜索",
         "desc": "调用搜索API获取信息"
     })
-    builder.add_node("visual_realtime_context_builder", wrap_realtime_context_builder, metadata={
+    builder.add_node("realtime_context_builder", wrap_realtime_context_builder, metadata={
         "title": "实时对话-上下文构建",
         "desc": "构建完整的对话上下文"
     })
-    builder.add_node("visual_realtime_llm_generate", wrap_realtime_llm_generate, metadata={
+    builder.add_node("realtime_llm_generate", wrap_realtime_llm_generate, metadata={
         "title": "实时对话-LLM生成",
         "desc": "生成AI回复"
     })
-    builder.add_node("visual_realtime_homework_check", wrap_realtime_homework_check, metadata={
+    builder.add_node("realtime_homework_check", wrap_realtime_homework_check, metadata={
         "title": "实时对话-作业意图识别",
         "desc": "识别是否提到作业完成并更新状态"
     })
-
+    
     # 添加TTS和保存记忆节点（所有分支共享）
-    builder.add_node("visual_tts", wrap_tts_visual)
-    builder.add_node("visual_save_memory", wrap_save_memory_visual)
+    builder.add_node("tts", wrap_tts_visual)
+    builder.add_node("save_memory", wrap_save_memory_visual)
     
     # 设置入口点
-    builder.set_entry_point("visual_load_memory")
+    builder.set_entry_point("load_memory")
     
     # 添加条件分支
     builder.add_conditional_edges(
-        source="visual_load_memory",
+        source="load_memory",
         path=wrap_route_decision_visual,
         path_map={
-            "主动关心": "visual_active_care",
-            "作业提醒": "visual_homework_check",
-            "口语练习": "visual_practice_asr",
-            "实时对话": "visual_realtime_search_judgment"
+            "主动关心": "active_care",
+            "作业提醒": "homework_check",
+            "口语练习": "practice_asr",
+            "实时对话": "realtime_search_judgment"
         }
     )
-
+    
     # ============== 连接口语练习分支 ==============
-    builder.add_edge("visual_practice_asr", "visual_practice_review_check")
-    builder.add_edge("visual_practice_review_check", "visual_practice_scenario_select")
-    builder.add_edge("visual_practice_scenario_select", "visual_practice_dialogue")
-    builder.add_edge("visual_practice_dialogue", "visual_practice_knowledge_extract")
-    builder.add_edge("visual_practice_knowledge_extract", "visual_practice_update_memory")
-    builder.add_edge("visual_practice_update_memory", "visual_practice_tts")
-
+    builder.add_edge("practice_asr", "practice_review_check")
+    builder.add_edge("practice_review_check", "practice_scenario_select")
+    builder.add_edge("practice_scenario_select", "practice_dialogue")
+    builder.add_edge("practice_dialogue", "practice_knowledge_extract")
+    builder.add_edge("practice_knowledge_extract", "practice_update_memory")
+    builder.add_edge("practice_update_memory", "practice_tts")
+    
     # ============== 连接实时对话分支 ==============
-    builder.add_edge("visual_realtime_search_judgment", "visual_realtime_web_search")
-    builder.add_edge("visual_realtime_web_search", "visual_realtime_context_builder")
-    builder.add_edge("visual_realtime_context_builder", "visual_realtime_llm_generate")
-    builder.add_edge("visual_realtime_llm_generate", "visual_realtime_homework_check")
-    builder.add_edge("visual_realtime_homework_check", "visual_tts")
-
+    builder.add_edge("realtime_search_judgment", "realtime_web_search")
+    builder.add_edge("realtime_web_search", "realtime_context_builder")
+    builder.add_edge("realtime_context_builder", "realtime_llm_generate")
+    builder.add_edge("realtime_llm_generate", "realtime_homework_check")
+    builder.add_edge("realtime_homework_check", "tts")
+    
     # 连接主动关心和作业提醒
-    builder.add_edge("visual_active_care", "visual_tts")
-    builder.add_edge("visual_homework_check", "visual_tts")
-
+    builder.add_edge("active_care", "tts")
+    builder.add_edge("homework_check", "tts")
+    
     # TTS后保存记忆
-    builder.add_edge("visual_tts", "visual_save_memory")
-
+    builder.add_edge("tts", "save_memory")
+    
     # 结束
-    builder.add_edge("visual_save_memory", END)
+    builder.add_edge("save_memory", END)
     
     return builder.compile()
 

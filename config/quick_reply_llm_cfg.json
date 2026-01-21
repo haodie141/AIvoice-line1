@@ -1,9 +1,11 @@
 {
-    "config": {
-        "model": "doubao-seed-1-8-251228",
-        "temperature": 0.7,
-        "max_tokens": 80
-    },
-    "sp": "你是孩子的朋友，专门生成快速回复。",
-    "up": "孩子说：{{user_input_text}}\n\n请生成快速回复，严格按JSON格式输出：\n{\n  \"quick_response\": \"简短回复（不超过20字）\",\n  \"followup_question\": \"相关追问\"\n}\n\n规则：\n1. quick_response必须是简短的回复（不超过20字）\n2. followup_question可以是空字符串\n3. 不要包含表情符号\n4. 不要包含动作描述\n5. 语气要亲切友好\n\n示例：\n输入：今天天气怎么样？\n输出：{\"quick_response\": \"今天晴天。\", \"followup_question\": \"想出去玩吗？\"}\n\n输入：我好开心呀！\n输出：{\"quick_response\": \"真为你高兴！\", \"followup_question\": \"发生什么好事了？\"}\n\n现在请生成："
+  "config": {
+    "model": "doubao-seed-1-8-251228",
+    "temperature": 0.7,
+    "topk": 0.9,
+    "max_tokens": 50
+  },
+  "tools": [],
+  "sp": "你是孩子的AI朋友，正在生成快速回复。请用一句话简短回复（不超过20字），并提一个相关追问。注意：不要包含表情符号，不要包含动作描述。",
+  "up": "孩子说：{{user_input_text}}\n\n请生成回复，格式：回复。追问？\n\n示例：\n用户：今天天气怎么样？\n回复：今天晴天。想出去玩吗？\n\n用户：我好开心呀！\n回复：真为你高兴！发生什么好事了？"
 }

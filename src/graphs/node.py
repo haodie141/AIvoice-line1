@@ -880,34 +880,6 @@ def voice_synthesis_node(
     )
 
 
-# ============== 辅助函数：危机检测 ==============
-def detect_crisis(user_input: str, child_name: str) -> bool:
-    """
-    检测用户输入是否包含危机内容
-    
-    Args:
-        user_input: 用户输入
-        child_name: 孩子姓名
-    
-    Returns:
-        是否检测到危机
-    """
-    # 危机关键词列表
-    crisis_keywords = [
-        "自杀", "死", "不想活了", "想死", "杀了自己",
-        "自残", "伤害自己", "割腕", "跳楼",
-        "暴力", "打人", "伤害别人", "杀人",
-        "抑郁症", "抑郁", "痛苦", "绝望"
-    ]
-    
-    # 检测是否包含危机关键词
-    for keyword in crisis_keywords:
-        if keyword in user_input:
-            return True
-    
-    return False
-
-
 # ============== 新增节点1：快速回复节点 ==============
 def quick_reply_node(
     state: QuickReplyInput,
@@ -915,94 +887,51 @@ def quick_reply_node(
     runtime: Runtime[Context]
 ) -> QuickReplyOutput:
     """
-    title: 快速回复节点（含危机检测）
-    desc: |
-      先输出简短回复+追问，提升首字延迟
-      
-      【核心特性】
-      - JSON格式输出，确保解析稳定
-      - 解析失败时使用规则兜底
-      - 包含危机检测，避免轻率回应风险场景
-      - 使用快速模型doubao-seed1.6-flash
-      - max_tokens=80，控制输出长度
+    title: 快速回复节点
+    desc: 先输出简短回复+追问，提升首字延迟
     integrations: 大语言模型
     """
     ctx = runtime.context
     
-    # ============== 危机检测 ==============
-    if detect_crisis(state.user_input_text, state.child_name):
-        # 检测到危机，返回特殊回复
-        return QuickReplyOutput(
-            quick_response="我听到了。",
-            followup_question="你愿意和我说说发生了什么吗？我会一直陪着你。"
-        )
+    # 快速回复提示词
+    quick_prompt = f"""你是{state.child_name}的朋友，正在生成快速回复。
+请用一句话简短回复（不超过20字），并提一个相关追问。
+注意：不要包含表情符号，不要包含动作描述。
+
+孩子说：{state.user_input_text}
+
+请生成回复，格式：回复。追问？
+
+例如：
+用户：今天天气怎么样？
+回复：今天晴天。想出去玩吗？
+
+用户：我好开心呀！
+回复：真为你高兴！发生什么好事了？"""
     
-    # 读取配置文件
-    cfg_file = os.path.join(os.getenv("COZE_WORKSPACE_PATH"), config['metadata']['llm_cfg'])
-    with open(cfg_file, 'r') as fd:
-        _cfg = json.load(fd)
-    
-    llm_config = _cfg.get("config", {})
-    up = _cfg.get("up", "")
-    
-    # 渲染用户提示词
-    up_tpl = Template(up)
-    user_prompt = up_tpl.render({"user_input": state.user_input_text})
-    
-    # 初始化LLM客户端
+    from coze_coding_dev_sdk import LLMClient
     client = LLMClient(ctx=ctx)
-    
-    # 调用大模型
     response = client.invoke(
-        messages=[HumanMessage(content=user_prompt)],
-        model=llm_config.get("model", "doubao-seed1.6-flash"),
-        temperature=llm_config.get("temperature", 0.7),
-        max_tokens=llm_config.get("max_tokens", 80)
+        messages=[HumanMessage(content=quick_prompt)],
+        model="doubao-seed-1-8-251228",
+        temperature=0.7,
+        max_tokens=50
     )
     
     response_text = str(response.content).strip()
     
-    # 尝试解析JSON
-    quick_response = ""
-    followup_question = ""
-    
-    try:
-        # 提取JSON部分
-        if "{" in response_text and "}" in response_text:
-            json_start = response_text.find("{")
-            json_end = response_text.rfind("}") + 1
-            json_str = response_text[json_start:json_end]
-            
-            result = json.loads(json_str)
-            quick_response = result.get("quick_response", "").strip()
-            followup_question = result.get("followup_question", "").strip()
-        else:
-            raise ValueError("未找到JSON格式")
-    except Exception as e:
-        # JSON解析失败，使用规则兜底
-        print(f"⚠️ quick_reply JSON解析失败，使用规则兜底: {e}")
-        
-        # 简单规则：取第一句话作为回复
-        if "。" in response_text:
-            parts = response_text.split("。", 1)
-            quick_response = parts[0] + "。"
-            followup_question = parts[1].strip() if len(parts) > 1 else ""
-        elif "?" in response_text:
-            parts = response_text.split("？", 1)
-            quick_response = parts[0] + "？"
-            followup_question = parts[1].strip() if len(parts) > 1 else ""
-        else:
-            # 如果仍然无法解析，使用默认回复
-            quick_response = response_text[:20] if len(response_text) > 20 else response_text
-            followup_question = ""
-    
-    # 二次兜底：确保quick_response不为空
-    if not quick_response:
-        quick_response = "好的呢！"
-    
-    # 限制quick_response长度（最多20字）
-    if len(quick_response) > 20:
-        quick_response = quick_response[:20]
+    # 解析回复和追问
+    if "。" in response_text:
+        parts = response_text.split("。", 1)
+        quick_response = parts[0] + "。"
+        followup_question = parts[1].strip() if len(parts) > 1 else ""
+    elif "?" in response_text:
+        parts = response_text.split("？", 1)
+        quick_response = parts[0] + "？"
+        followup_question = parts[1].strip() if len(parts) > 1 else ""
+    else:
+        quick_response = response_text
+        followup_question = ""
     
     return QuickReplyOutput(
         quick_response=quick_response,
@@ -1018,26 +947,10 @@ def quick_chat_node(
 ) -> QuickChatOutput:
     """
     title: 轻量级聊天节点
-    desc: |
-      闲聊场景专用，跳过搜索、作业判断，只保留核心对话
-      
-      【核心特性】
-      - 禁止检索、禁止工具、禁止长答
-      - 严格控制在60字以内
-      - 只保留最近3条对话，降低上下文长度
-      - 使用快速模型doubao-seed1.6-flash
+    desc: 闲聊场景专用，跳过搜索、作业判断，只保留核心对话
     integrations: 大语言模型
     """
     ctx = runtime.context
-    
-    # 读取配置文件
-    cfg_file = os.path.join(os.getenv("COZE_WORKSPACE_PATH"), config['metadata']['llm_cfg'])
-    with open(cfg_file, 'r') as fd:
-        _cfg = json.load(fd)
-    
-    llm_config = _cfg.get("config", {})
-    sp = _cfg.get("sp", "")
-    up = _cfg.get("up", "")
     
     # 只保留最近3条对话，降低上下文长度
     recent_history = state.conversation_history[-3:] if state.conversation_history else []
@@ -1048,92 +961,54 @@ def quick_chat_node(
         content = msg.get("content", "")
         history_text += f"{role}: {content}\n"
     
-    # 渲染提示词
-    sp_tpl = Template(sp)
-    system_prompt = sp_tpl.render({"child_name": state.child_name})
+    prompt = f"""你是{state.child_name}的朋友，正在进行轻松的闲聊。
+请用友好、亲切的语气回复，不需要搜索信息，不需要讨论作业。
+注意：不要包含表情符号，不要包含动作描述。
+
+最近对话：
+{history_text}
+
+孩子说：{state.user_input_text}
+
+请回复。"""
     
-    up_tpl = Template(up)
-    user_prompt = up_tpl.render({
-        "user_input": state.user_input_text,
-        "conversation_history": history_text
-    })
-    
-    # 初始化LLM客户端
+    from coze_coding_dev_sdk import LLMClient
     client = LLMClient(ctx=ctx)
-    
-    # 构建消息
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt)
-    ]
-    
-    # 调用大模型
     response = client.invoke(
-        messages=messages,
-        model=llm_config.get("model", "doubao-seed1.6-flash"),
-        temperature=llm_config.get("temperature", 0.8),
-        max_tokens=llm_config.get("max_tokens", 80)
+        messages=[HumanMessage(content=prompt)],
+        model="doubao-seed-1-8-251228",
+        temperature=0.8,
+        max_tokens=100
     )
     
-    ai_response = str(response.content).strip()
-    
-    # 二次兜底：限制回复长度（最多60字）
-    if len(ai_response) > 60:
-        ai_response = ai_response[:60]
-    
-    return QuickChatOutput(ai_response=ai_response)
+    return QuickChatOutput(ai_response=str(response.content).strip())
 
 
-# ============== 优化：场景类型自动判定（带负向覆盖） ==============
+# ============== 优化：场景类型自动判定 ==============
 def detect_scenario_type(user_input_text: str) -> str:
-    """
-    自动判定场景类型（支持负向覆盖）
+    """自动判定场景类型"""
     
-    【优化点】
-    - 负向覆盖：检测否定短语，避免误判
-    - 优先级：负向匹配 > 正向匹配 > 默认分类
-    """
-    
-    # ============== 1. 负向匹配（最高优先级） ==============
-    # 否定短语列表
-    negative_phrases = ["不想", "不用", "没做", "不是", "不要", "别", "拒绝", "拒绝做"]
-    
-    # 检测是否包含否定短语
-    has_negative = any(neg in user_input_text for neg in negative_phrases)
-    
-    # ============== 2. 闲聊关键词（优先级高） ==============
+    # 1. 闲聊关键词
     chat_keywords = ["你好", "谢谢", "再见", "喜欢", "开心", "难过", "吃饭", "睡觉", "哈哈", "嗯嗯"]
     if any(kw in user_input_text for kw in chat_keywords):
-        # 闲聊场景受否定短语影响
-        if has_negative:
-            # 如"我不开心"，仍然是情感类，但需要特殊处理
-            return "chat"
         return "chat"
     
-    # ============== 3. 作业关键词（带负向覆盖） ==============
+    # 2. 作业关键词
     homework_keywords = ["作业", "练习", "复习", "考试", "题目", "做完", "完成"]
     if any(kw in user_input_text for kw in homework_keywords):
-        # 关键：检查是否是负向表达
-        if has_negative:
-            # 如"我不想做作业"、"这不是作业"，不应归类为homework
-            # 而应归类为general或chat
-            return "general"
         return "homework"
     
-    # ============== 4. 练习关键词 ==============
+    # 3. 练习关键词
     practice_keywords = ["练习", "说", "读", "背", "口语"]
     if any(kw in user_input_text for kw in practice_keywords):
-        # 口语练习通常不受否定短语影响
-        # 如"不想练习口语"仍应归类为practice，因为意图明确
         return "practice"
     
-    # ============== 5. 事实查询关键词 ==============
+    # 4. 事实查询关键词
     fact_keywords = ["天气", "新闻", "几点", "日期", "哪里", "多少钱", "谁是", "什么是"]
     if any(kw in user_input_text for kw in fact_keywords):
-        # 事实查询不受否定短语影响
         return "fact_query"
     
-    # ============== 6. 默认通用 ==============
+    # 5. 默认通用
     return "general"
 
 

@@ -30,13 +30,8 @@ class GlobalState(BaseModel):
     ai_response: str = Field(default="", description="AI的文本响应")
     ai_response_audio: Optional[str] = Field(default=None, description="AI的音频响应URL")
     
-    # 快速回复（v2.0新增）
-    quick_response: str = Field(default="", description="快速回复（优先返回，提升首字延迟）")
-    followup_question: str = Field(default="", description="追问内容")
-    
     # 触发场景
     trigger_type: str = Field(default="", description="触发类型：conversation/practice/care/remind")
-    scenario_type: str = Field(default="", description="场景类型（用于优化路由）")
     
     # 时间信息
     current_time: str = Field(default="", description="当前时间（ISO格式）")
@@ -62,23 +57,9 @@ class GraphInput(BaseModel):
 
 class GraphOutput(BaseModel):
     """工作流输出"""
-    quick_response: str = Field(default="", description="""
-      快速回复（优先返回，提升首字延迟）
-      
-      【合并策略】
-      1. quick_response优先播报 - 快速回复会立即返回，用于降低首字延迟
-      2. 完整回复延迟补充 - ai_response是完整的回复，会延迟返回
-      3. 互补不覆盖 - quick_response和ai_response互补，后者不会覆盖前者
-      4. 去重合并 - 如果ai_response包含quick_response的内容，前端应去重
-      5. 语音合成 - quick_response优先TTS，ai_response延迟补充
-      
-      【使用场景】
-      - 简单问答：只播报quick_response
-      - 复杂问题：先播报quick_response，再补充ai_response的新增内容
-      - 闲聊场景：通常quick_response足够，ai_response可作为补充
-    """)
+    quick_response: str = Field(default="", description="快速回复（优先返回，提升首字延迟）")
     followup_question: str = Field(default="", description="追问内容")
-    ai_response: str = Field(..., description="AI的文本响应（完整回复）")
+    ai_response: str = Field(..., description="AI的文本响应")
     ai_response_audio: Optional[str] = Field(default=None, description="AI的音频响应URL")
     trigger_type: str = Field(..., description="触发类型")
     scenario_type: str = Field(default="", description="实际执行的场景类型")
@@ -227,7 +208,6 @@ class LoadMemoryWrapOutput(BaseModel):
     child_age: int = Field(..., description="孩子年龄")
     child_interests: List[str] = Field(default=[], description="孩子兴趣爱好")
     trigger_type: str = Field(..., description="触发类型")
-    scenario_type: str = Field(default="", description="场景类型（用于路由决策）")
     user_input_text: str = Field(default="", description="用户输入文本")
     user_input_audio: Optional[File] = Field(default=None, description="用户输入音频")
     homework_list: List[dict] = Field(default=[], description="作业列表")
@@ -336,38 +316,24 @@ class QuickChatOutput(BaseModel):
 
 # ============== 新增节点：快速回复包装节点 ==============
 class QuickReplyWrapInput(BaseModel):
-    """快速回复包装节点输入（从GlobalState获取）"""
-    child_id: str = Field(..., description="孩子ID")
-    child_name: str = Field(..., description="孩子姓名")
-    child_age: int = Field(..., description="孩子年龄")
+    """快速回复包装节点输入"""
     user_input_text: str = Field(..., description="用户输入文本")
-    conversation_history: List[dict] = Field(default=[], description="对话历史")
-    homework_status: str = Field(default="", description="作业状态")
+    child_name: str = Field(..., description="孩子姓名")
 
 class QuickReplyWrapOutput(BaseModel):
     """快速回复包装节点输出"""
     quick_response: str = Field(..., description="快速回复")
     followup_question: str = Field(default="", description="追问")
-    # 保留其他字段，确保下一个节点能够获取
-    child_id: str = Field(..., description="孩子ID（透传）")
-    child_name: str = Field(..., description="孩子姓名（透传）")
-    child_age: int = Field(..., description="孩子年龄（透传）")
     user_input_text: str = Field(..., description="用户输入文本（透传）")
-    conversation_history: List[dict] = Field(default=[], description="对话历史（透传）")
-    homework_status: str = Field(default="", description="作业状态（透传）")
+    child_name: str = Field(..., description="孩子姓名（透传）")
 
 # ============== 新增节点：轻量级聊天包装节点 ==============
 class QuickChatWrapInput(BaseModel):
-    """轻量级聊天包装节点输入（从GlobalState获取）"""
-    child_id: str = Field(..., description="孩子ID")
-    child_name: str = Field(..., description="孩子姓名")
-    child_age: int = Field(..., description="孩子年龄")
+    """轻量级聊天包装节点输入"""
     user_input_text: str = Field(..., description="用户输入文本")
+    child_name: str = Field(..., description="孩子姓名")
     conversation_history: List[dict] = Field(default=[], description="对话历史")
 
 class QuickChatWrapOutput(BaseModel):
     """轻量级聊天包装节点输出"""
     ai_response: str = Field(..., description="AI回复")
-    child_id: str = Field(..., description="孩子ID（透传）")
-    child_name: str = Field(..., description="孩子姓名（透传）")
-    child_age: int = Field(..., description="孩子年龄（透传）")
