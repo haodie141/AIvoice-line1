@@ -109,7 +109,8 @@ AI 陪伴孩子智能体是一个基于 LangGraph 框架构建的智能陪伴系
 │   ├── 节点内部流程说明.md           # 各节点详细流程
 │   ├── 可视化优化说明.md             # 可视化优化思路
 │   ├── v2.0更新说明.md              # v2.0 版本更新说明
-│   └── 节点详细说明.md              # 节点输入输出和处理过程详细说明
+│   ├── 节点详细说明.md              # 节点输入输出和处理过程详细说明
+│   └── 本地部署指南.md              # 本地部署完整指南
 ├── scripts/                         # 脚本目录
 │   ├── local_run.sh                 # 本地运行脚本
 │   └── http_run.sh                  # HTTP服务启动脚本
@@ -157,21 +158,42 @@ AI 陪伴孩子智能体是一个基于 LangGraph 框架构建的智能陪伴系
 git clone https://github.com/haodie141/AIvoice-line1.git
 cd AIvoice-line1
 
+# （推荐）创建虚拟环境
+python3 -m venv venv
+source venv/bin/activate  # Windows: .\venv\Scripts\activate
+
 # 安装依赖
 pip install -r requirements.txt
 ```
 
-### 配置环境变量
-
-创建 `.env` 文件（可选）：
+### 启动服务
 
 ```bash
-# 设置运行模式（可选，默认为 full_companion）
-COZE_GRAPH_MODE=full_companion  # 完整模式
-# COZE_GRAPH_MODE=detailed        # 可视化模式
-# COZE_GRAPH_MODE=realtime_call   # 实时通话模式
+# 启动 HTTP 服务
+python src/main.py -m http
 
-# 设置工作目录（可选，默认为当前目录）
+# 服务将在 http://localhost:5000 启动
+```
+
+### 测试部署
+
+```bash
+# 使用 curl 测试
+curl -X POST http://localhost:5000/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "child_id": "test_001",
+    "child_name": "测试",
+    "child_age": 10,
+    "trigger_type": "conversation",
+    "user_input_text": "你好"
+  }'
+
+# 或访问健康检查
+curl http://localhost:5000/health
+```
+
+**📚 详细部署指南：** [docs/本地部署指南.md](docs/本地部署指南.md)
 COZE_WORKSPACE_PATH=/path/to/workspace
 ```
 
