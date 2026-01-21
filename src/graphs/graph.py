@@ -22,6 +22,8 @@ from .state import (
     RealtimeConversationInput, RealtimeConversationOutput,
     VoiceSynthesisInput, VoiceSynthesisOutput,
     RouteDecisionInput,
+    QuickReplyInput, QuickReplyOutput,
+    QuickChatInput, QuickChatOutput,
     QuickReplyWrapInput, QuickReplyWrapOutput,
     QuickChatWrapInput, QuickChatWrapOutput
 )
@@ -308,7 +310,13 @@ def wrap_quick_reply(
     config: RunnableConfig,
     runtime: Runtime[Context]
 ) -> QuickReplyWrapOutput:
-    """快速回复包装"""
+    """
+    快速回复包装
+    
+    【功能】
+    - 生成快速回复（不超过20字）+ 追问
+    - 透传所有必要字段给realtime_conversation节点
+    """
     node_input = QuickReplyInput(
         user_input_text=state.user_input_text,
         child_name=state.child_name
@@ -318,8 +326,12 @@ def wrap_quick_reply(
     return QuickReplyWrapOutput(
         quick_response=node_output.quick_response,
         followup_question=node_output.followup_question,
+        child_id=state.child_id,
+        child_name=state.child_name,
+        child_age=state.child_age,
         user_input_text=state.user_input_text,
-        child_name=state.child_name
+        conversation_history=state.conversation_history,
+        homework_status=state.homework_status
     )
 
 
@@ -329,7 +341,14 @@ def wrap_quick_chat(
     config: RunnableConfig,
     runtime: Runtime[Context]
 ) -> QuickChatWrapOutput:
-    """轻量级聊天包装"""
+    """
+    轻量级聊天包装
+    
+    【功能】
+    - 闲聊场景专用，跳过搜索和作业判断
+    - 严格控制在60字以内
+    - 透传child信息供后续节点使用
+    """
     node_input = QuickChatInput(
         user_input_text=state.user_input_text,
         child_name=state.child_name,
@@ -337,15 +356,40 @@ def wrap_quick_chat(
     )
     node_output: QuickChatOutput = quick_chat_node(node_input, config, runtime)
     
-    return QuickChatWrapOutput(ai_response=node_output.ai_response)
+    return QuickChatWrapOutput(
+        ai_response=node_output.ai_response,
+        child_id=state.child_id,
+        child_name=state.child_name,
+        child_age=state.child_age
+    )
 
 
 # ============== 条件判断包装函数 ==============
 def wrap_route_decision(state: LoadMemoryWrapOutput) -> str:
-    """路由决策"""
+    """
+    路由决策（支持场景类型短路）
+    
+    【优化点】
+    - 闲聊场景：使用quick_chat节点（轻量级）
+    - 通用场景：使用quick_reply + realtime_conversation（快速回复+完整回复）
+    - 特定场景：作业/口语/关心使用对应节点
+    """
+    scenario_type = state.scenario_type or "general"
+    trigger_type = state.trigger_type or "conversation"
+    
+    # ============== 场景短路逻辑 ==============
+    # 1. 闲聊场景 -> 使用quick_chat（轻量级，跳过搜索和作业判断）
+    if scenario_type == "chat":
+        return "快速聊天"
+    
+    # 2. 通用场景 -> 使用quick_reply + realtime_conversation
+    if scenario_type == "general":
+        return "快速对话"
+    
+    # 3. 其他特定场景 -> 使用传统路由
     node_input = RouteDecisionInput(
-        trigger_type=state.trigger_type,
-        need_remind=False  # 这个参数在load阶段还不确定
+        trigger_type=trigger_type,
+        need_remind=False
     )
     return route_decision(node_input)
 
@@ -368,14 +412,28 @@ builder.add_node("realtime_conversation", wrap_realtime_conversation, metadata={
 builder.add_node("voice_synthesis", wrap_voice_synthesis)
 builder.add_node("save_memory", wrap_save_memory)
 
+# 新增：快速回复节点
+builder.add_node("quick_reply", wrap_quick_reply, metadata={
+    "type": "agent",
+    "llm_cfg": "config/quick_reply_llm_cfg.json"
+})
+
+# 新增：轻量级聊天节点
+builder.add_node("quick_chat", wrap_quick_chat, metadata={
+    "type": "agent",
+    "llm_cfg": "config/quick_chat_llm_cfg.json"
+})
+
 # 设置入口点
 builder.set_entry_point("load_memory")
 
-# 添加条件分支
+# 添加条件分支（支持场景短路）
 builder.add_conditional_edges(
     source="load_memory",
     path=wrap_route_decision,
     path_map={
+        "快速聊天": "quick_chat",           # 闲聊场景 -> 轻量级聊天
+        "快速对话": "quick_reply",         # 通用场景 -> 快速回复 + 完整对话
         "主动关心": "active_care",
         "作业提醒": "homework_check",
         "口语练习": "speaking_practice",
@@ -383,7 +441,14 @@ builder.add_conditional_edges(
     }
 )
 
-# 添加后续边 - 所有处理分支都汇聚到语音合成
+# 添加后续边
+# 快速聊天 -> 直接语音合成
+builder.add_edge("quick_chat", "voice_synthesis")
+
+# 快速回复 -> 完整对话（用于通用场景，先快速回复后补充完整回复）
+builder.add_edge("quick_reply", "realtime_conversation")
+
+# 传统分支 -> 语音合成
 builder.add_edge("active_care", "voice_synthesis")
 builder.add_edge("homework_check", "voice_synthesis")
 builder.add_edge("speaking_practice", "voice_synthesis")

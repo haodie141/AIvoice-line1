@@ -117,6 +117,7 @@ class PracticeTTSInput(BaseModel):
     """口语练习-TTS节点输入"""
     ai_response: str = Field(..., description="AI的回复")
     child_age: int = Field(..., description="孩子年龄")
+    child_name: str = Field(..., description="孩子姓名")
 
 class PracticeTTSOutput(BaseModel):
     """口语练习-TTS节点输出"""
@@ -227,6 +228,7 @@ class VisualGlobalState(BaseModel):
     # 可视化模式特有的中间状态
     # 口语练习拆分节点的中间状态
     practice_has_review: bool = Field(default=False, description="是否有需要复习的知识点")
+    should_review: bool = Field(default=False, description="是否应该进行复习")
     practice_scenario_key: str = Field(default="", description="选择的场景key")
     practice_scenario_name: str = Field(default="", description="场景名称")
     practice_topic: str = Field(default="", description="选择的话题")

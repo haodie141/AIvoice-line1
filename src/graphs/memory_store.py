@@ -425,3 +425,102 @@ class MemoryStore:
         if "homework_checks" in child_data and "last_check" in child_data["homework_checks"]:
             return child_data["homework_checks"]["last_check"]
         return None
+    
+    # ============== 短期缓存机制（1-2分钟缓存相似问题） ==============
+    
+    def get_cache_key(self, scenario_type: str, user_input: str) -> str:
+        """
+        生成缓存key
+        
+        Args:
+            scenario_type: 场景类型
+            user_input: 用户输入
+        
+        Returns:
+            缓存key
+        """
+        # 简化输入：去除多余空格，转小写
+        normalized_input = user_input.strip().lower()
+        return f"{scenario_type}:{normalized_input}"
+    
+    def get_cached_response(
+        self,
+        child_id: str,
+        scenario_type: str,
+        user_input: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        获取缓存的响应
+        
+        Args:
+            child_id: 孩子ID
+            scenario_type: 场景类型
+            user_input: 用户输入
+        
+        Returns:
+            缓存的响应（如果存在且未过期），否则返回None
+        """
+        cache_key = self.get_cache_key(scenario_type, user_input)
+        child_data = self._get_child_data(child_id)
+        
+        if "response_cache" not in child_data:
+            child_data["response_cache"] = {}
+        
+        if cache_key in child_data["response_cache"]:
+            cached = child_data["response_cache"][cache_key]
+            
+            # 检查缓存是否过期（默认2分钟）
+            cached_time_str = cached.get("cached_at", "")
+            if cached_time_str:
+                try:
+                    cached_time = datetime.fromisoformat(cached_time_str)
+                    # 缓存有效期：2分钟
+                    if datetime.now() - cached_time < timedelta(minutes=2):
+                        return cached.get("response")
+                except (ValueError, TypeError):
+                    pass
+        
+        return None
+    
+    def set_cached_response(
+        self,
+        child_id: str,
+        scenario_type: str,
+        user_input: str,
+        response: Dict[str, Any]
+    ) -> None:
+        """
+        设置缓存的响应
+        
+        Args:
+            child_id: 孩子ID
+            scenario_type: 场景类型
+            user_input: 用户输入
+            response: 要缓存的响应
+        """
+        cache_key = self.get_cache_key(scenario_type, user_input)
+        child_data = self._get_child_data(child_id)
+        
+        if "response_cache" not in child_data:
+            child_data["response_cache"] = {}
+        
+        # 设置缓存（包含时间戳）
+        child_data["response_cache"][cache_key] = {
+            "response": response,
+            "cached_at": datetime.now().isoformat()
+        }
+        
+        # 限制缓存大小（每个孩子最多缓存50条）
+        if len(child_data["response_cache"]) > 50:
+            # 删除最早的缓存
+            oldest_key = min(
+                child_data["response_cache"].keys(),
+                key=lambda k: child_data["response_cache"][k].get("cached_at", "")
+            )
+            del child_data["response_cache"][oldest_key]
+    
+    def clear_cache(self, child_id: str) -> None:
+        """清除孩子的缓存"""
+        child_data = self._get_child_data(child_id)
+        if "response_cache" in child_data:
+            del child_data["response_cache"]
