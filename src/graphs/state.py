@@ -44,8 +44,12 @@ class GraphInput(BaseModel):
     child_age: int = Field(..., description="孩子年龄")
     child_interests: List[str] = Field(default=[], description="孩子兴趣爱好")
     trigger_type: Literal["conversation", "practice", "care", "remind"] = Field(
-        default="conversation", 
+        default="conversation",
         description="触发类型"
+    )
+    scenario_type: Literal["chat", "homework", "practice", "fact_query", "general"] = Field(
+        default="general",
+        description="场景类型（用于优化路由和短路不必要节点）"
     )
     user_input_text: str = Field(default="", description="用户输入文本（可选）")
     user_input_audio: Optional[File] = Field(default=None, description="用户输入音频（可选）")
@@ -53,9 +57,14 @@ class GraphInput(BaseModel):
 
 class GraphOutput(BaseModel):
     """工作流输出"""
+    quick_response: str = Field(default="", description="快速回复（优先返回，提升首字延迟）")
+    followup_question: str = Field(default="", description="追问内容")
     ai_response: str = Field(..., description="AI的文本响应")
     ai_response_audio: Optional[str] = Field(default=None, description="AI的音频响应URL")
     trigger_type: str = Field(..., description="触发类型")
+    scenario_type: str = Field(default="", description="实际执行的场景类型")
+    execution_path: List[str] = Field(default=[], description="执行路径（节点列表）")
+    performance_metrics: dict = Field(default={}, description="性能指标")
     homework_status: str = Field(default="", description="作业状态")
     speaking_practice_count: int = Field(default=0, description="口语练习次数")
 
@@ -282,3 +291,49 @@ class SaveMemoryWrapInput(BaseModel):
 class SaveMemoryWrapOutput(BaseModel):
     """保存记忆包装节点输出"""
     saved: bool = Field(default=True, description="是否保存成功")
+
+# ============== 新增节点：快速回复节点 ==============
+class QuickReplyInput(BaseModel):
+    """快速回复节点输入"""
+    user_input_text: str = Field(..., description="用户输入文本")
+    child_name: str = Field(..., description="孩子姓名")
+
+class QuickReplyOutput(BaseModel):
+    """快速回复节点输出"""
+    quick_response: str = Field(..., description="快速回复（不超过20字）")
+    followup_question: str = Field(default="", description="追问")
+
+# ============== 新增节点：轻量级聊天节点 ==============
+class QuickChatInput(BaseModel):
+    """轻量级聊天节点输入"""
+    user_input_text: str = Field(..., description="用户输入文本")
+    child_name: str = Field(..., description="孩子姓名")
+    conversation_history: List[dict] = Field(default=[], description="最近3条对话")
+
+class QuickChatOutput(BaseModel):
+    """轻量级聊天节点输出"""
+    ai_response: str = Field(..., description="AI回复")
+
+# ============== 新增节点：快速回复包装节点 ==============
+class QuickReplyWrapInput(BaseModel):
+    """快速回复包装节点输入"""
+    user_input_text: str = Field(..., description="用户输入文本")
+    child_name: str = Field(..., description="孩子姓名")
+
+class QuickReplyWrapOutput(BaseModel):
+    """快速回复包装节点输出"""
+    quick_response: str = Field(..., description="快速回复")
+    followup_question: str = Field(default="", description="追问")
+    user_input_text: str = Field(..., description="用户输入文本（透传）")
+    child_name: str = Field(..., description="孩子姓名（透传）")
+
+# ============== 新增节点：轻量级聊天包装节点 ==============
+class QuickChatWrapInput(BaseModel):
+    """轻量级聊天包装节点输入"""
+    user_input_text: str = Field(..., description="用户输入文本")
+    child_name: str = Field(..., description="孩子姓名")
+    conversation_history: List[dict] = Field(default=[], description="对话历史")
+
+class QuickChatWrapOutput(BaseModel):
+    """轻量级聊天包装节点输出"""
+    ai_response: str = Field(..., description="AI回复")

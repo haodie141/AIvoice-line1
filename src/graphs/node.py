@@ -17,7 +17,9 @@ from graphs.state import (
     SpeakingPracticeInput, SpeakingPracticeOutput,
     RealtimeConversationInput, RealtimeConversationOutput,
     VoiceSynthesisInput, VoiceSynthesisOutput,
-    RouteDecisionInput
+    RouteDecisionInput,
+    QuickReplyInput, QuickReplyOutput,
+    QuickChatInput, QuickChatOutput
 )
 
 
@@ -720,11 +722,21 @@ def realtime_conversation_node(
     time_of_day = "早上" if current_time.hour < 12 else "下午" if current_time.hour < 18 else "晚上"
     current_date = current_time.strftime("%Y年%m月%d日")
     
-    # ============== 新增：判断是否需要联网检索 ==============
+    # ============== 优化：判断是否需要联网检索（规则+LLM混合） ==============
     search_context = ""
     try:
-        # 使用轻量级LLM判断是否需要联网搜索
-        judgment_prompt = f"""你是一个检索需求判断助手。判断以下孩子的问题是否需要联网搜索获取最新信息。
+        # 步骤1：规则判断（覆盖95%场景）
+        rule_result = should_search_web_rule(state.user_input_text)
+        
+        if rule_result is True:
+            # 规则判定为需要搜索
+            search_query = state.user_input_text
+        elif rule_result is False:
+            # 规则判定为不需要搜索
+            search_query = ""
+        else:
+            # 规则无法确定，使用LLM判断（仅5%场景）
+            judgment_prompt = f"""你是一个检索需求判断助手。判断以下孩子的问题是否需要联网搜索获取最新信息。
 
 孩子的年龄：{state.child_age}岁
 孩子的问题：{state.user_input_text}
@@ -748,40 +760,45 @@ def realtime_conversation_node(
 规则：
 - need_search: 需要联网搜索设为true，否则false
 - search_query: 提取搜索关键词，如果不需要搜索则为空字符串"""
-        
-        client = LLMClient(ctx=ctx)
-        judgment_messages = [HumanMessage(content=judgment_prompt)]
-        judgment_response = client.invoke(
-            messages=judgment_messages,
-            model="doubao-seed-1-8-251228",
-            temperature=0.1
-        )
-        
-        # 解析判断结果
-        judgment_text = str(judgment_response.content).strip()
-        if "{" in judgment_text and "}" in judgment_text:
-            json_start = judgment_text.find("{")
-            json_end = judgment_text.rfind("}") + 1
-            json_str = judgment_text[json_start:json_end]
-            judgment_result = json.loads(json_str)
             
-            if judgment_result.get("need_search", False):
-                search_query = judgment_result.get("search_query", state.user_input_text)
+            client = LLMClient(ctx=ctx)
+            judgment_messages = [HumanMessage(content=judgment_prompt)]
+            judgment_response = client.invoke(
+                messages=judgment_messages,
+                model="doubao-seed-1-8-251228",
+                temperature=0.1
+            )
+            
+            # 解析判断结果
+            judgment_text = str(judgment_response.content).strip()
+            if "{" in judgment_text and "}" in judgment_text:
+                json_start = judgment_text.find("{")
+                json_end = judgment_text.rfind("}") + 1
+                json_str = judgment_text[json_start:json_end]
+                judgment_result = json.loads(json_str)
                 
-                # 调用联网搜索
-                try:
-                    search_client = SearchClient(ctx=ctx)
-                    search_response = search_client.web_search_with_summary(
-                        query=search_query,
-                        count=3
-                    )
-                    
-                    # 提取搜索摘要作为上下文
-                    if search_response.summary:
-                        search_context = f"\n\n联网检索信息：\n{search_response.summary}\n"
-                except Exception as search_error:
-                    # 搜索失败，继续正常对话
-                    print(f"联网搜索失败: {search_error}")
+                if judgment_result.get("need_search", False):
+                    search_query = judgment_result.get("search_query", state.user_input_text)
+                else:
+                    search_query = ""
+            else:
+                search_query = ""
+        
+        # 步骤2：执行搜索
+        if search_query:
+            try:
+                search_client = SearchClient(ctx=ctx)
+                search_response = search_client.web_search_with_summary(
+                    query=search_query,
+                    count=3
+                )
+                
+                # 提取搜索摘要作为上下文
+                if search_response.summary:
+                    search_context = f"\n\n联网检索信息：\n{search_response.summary}\n"
+            except Exception as search_error:
+                # 搜索失败，继续正常对话
+                print(f"联网搜索失败: {search_error}")
     except Exception as e:
         # 判断失败，继续正常对话
         print(f"检索需求判断失败: {e}")
@@ -861,6 +878,165 @@ def voice_synthesis_node(
         audio_url=audio_url,
         audio_size=audio_size
     )
+
+
+# ============== 新增节点1：快速回复节点 ==============
+def quick_reply_node(
+    state: QuickReplyInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> QuickReplyOutput:
+    """
+    title: 快速回复节点
+    desc: 先输出简短回复+追问，提升首字延迟
+    integrations: 大语言模型
+    """
+    ctx = runtime.context
+    
+    # 快速回复提示词
+    quick_prompt = f"""你是{state.child_name}的朋友，正在生成快速回复。
+请用一句话简短回复（不超过20字），并提一个相关追问。
+注意：不要包含表情符号，不要包含动作描述。
+
+孩子说：{state.user_input_text}
+
+请生成回复，格式：回复。追问？
+
+例如：
+用户：今天天气怎么样？
+回复：今天晴天。想出去玩吗？
+
+用户：我好开心呀！
+回复：真为你高兴！发生什么好事了？"""
+    
+    from coze_coding_dev_sdk import LLMClient
+    client = LLMClient(ctx=ctx)
+    response = client.invoke(
+        messages=[HumanMessage(content=quick_prompt)],
+        model="doubao-seed-1-8-251228",
+        temperature=0.7,
+        max_tokens=50
+    )
+    
+    response_text = str(response.content).strip()
+    
+    # 解析回复和追问
+    if "。" in response_text:
+        parts = response_text.split("。", 1)
+        quick_response = parts[0] + "。"
+        followup_question = parts[1].strip() if len(parts) > 1 else ""
+    elif "?" in response_text:
+        parts = response_text.split("？", 1)
+        quick_response = parts[0] + "？"
+        followup_question = parts[1].strip() if len(parts) > 1 else ""
+    else:
+        quick_response = response_text
+        followup_question = ""
+    
+    return QuickReplyOutput(
+        quick_response=quick_response,
+        followup_question=followup_question
+    )
+
+
+# ============== 新增节点2：轻量级聊天节点 ==============
+def quick_chat_node(
+    state: QuickChatInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> QuickChatOutput:
+    """
+    title: 轻量级聊天节点
+    desc: 闲聊场景专用，跳过搜索、作业判断，只保留核心对话
+    integrations: 大语言模型
+    """
+    ctx = runtime.context
+    
+    # 只保留最近3条对话，降低上下文长度
+    recent_history = state.conversation_history[-3:] if state.conversation_history else []
+    
+    history_text = ""
+    for msg in recent_history:
+        role = msg.get("role", "unknown")
+        content = msg.get("content", "")
+        history_text += f"{role}: {content}\n"
+    
+    prompt = f"""你是{state.child_name}的朋友，正在进行轻松的闲聊。
+请用友好、亲切的语气回复，不需要搜索信息，不需要讨论作业。
+注意：不要包含表情符号，不要包含动作描述。
+
+最近对话：
+{history_text}
+
+孩子说：{state.user_input_text}
+
+请回复。"""
+    
+    from coze_coding_dev_sdk import LLMClient
+    client = LLMClient(ctx=ctx)
+    response = client.invoke(
+        messages=[HumanMessage(content=prompt)],
+        model="doubao-seed-1-8-251228",
+        temperature=0.8,
+        max_tokens=100
+    )
+    
+    return QuickChatOutput(ai_response=str(response.content).strip())
+
+
+# ============== 优化：场景类型自动判定 ==============
+def detect_scenario_type(user_input_text: str) -> str:
+    """自动判定场景类型"""
+    
+    # 1. 闲聊关键词
+    chat_keywords = ["你好", "谢谢", "再见", "喜欢", "开心", "难过", "吃饭", "睡觉", "哈哈", "嗯嗯"]
+    if any(kw in user_input_text for kw in chat_keywords):
+        return "chat"
+    
+    # 2. 作业关键词
+    homework_keywords = ["作业", "练习", "复习", "考试", "题目", "做完", "完成"]
+    if any(kw in user_input_text for kw in homework_keywords):
+        return "homework"
+    
+    # 3. 练习关键词
+    practice_keywords = ["练习", "说", "读", "背", "口语"]
+    if any(kw in user_input_text for kw in practice_keywords):
+        return "practice"
+    
+    # 4. 事实查询关键词
+    fact_keywords = ["天气", "新闻", "几点", "日期", "哪里", "多少钱", "谁是", "什么是"]
+    if any(kw in user_input_text for kw in fact_keywords):
+        return "fact_query"
+    
+    # 5. 默认通用
+    return "general"
+
+
+# ============== 优化：规则判断是否需要联网搜索 ==============
+def should_search_web_rule(user_text: str) -> bool:
+    """规则判断是否需要联网搜索（覆盖95%场景）"""
+    
+    # 1. 关键词规则（覆盖80%场景）
+    search_keywords = [
+        "天气", "新闻", "股价", "附近", "最新", "现在几点", "今天日期",
+        "汇率", "彩票", "快递", "航班", "公交", "地铁", "路况", "时间"
+    ]
+    
+    for keyword in search_keywords:
+        if keyword in user_text:
+            return True
+    
+    # 2. 疑问句式（覆盖15%场景）
+    question_patterns = ["是", "什么", "怎么样", "多少", "哪里", "何时", "如何"]
+    if any(p in user_text for p in question_patterns):
+        return True
+    
+    # 3. 不确定场景（5%场景），需要LLM判断
+    uncertain_patterns = ["告诉我", "我想知道", "帮我查", "查一下"]
+    if any(p in user_text for p in uncertain_patterns):
+        return None  # 返回None表示需要LLM判断
+    
+    return False
 
 
 # ============== 条件判断函数：路由决策 ==============

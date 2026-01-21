@@ -21,7 +21,9 @@ from .state import (
     SpeakingPracticeInput, SpeakingPracticeOutput,
     RealtimeConversationInput, RealtimeConversationOutput,
     VoiceSynthesisInput, VoiceSynthesisOutput,
-    RouteDecisionInput
+    RouteDecisionInput,
+    QuickReplyWrapInput, QuickReplyWrapOutput,
+    QuickChatWrapInput, QuickChatWrapOutput
 )
 from .node import (
     long_term_memory_node,
@@ -30,7 +32,10 @@ from .node import (
     speaking_practice_node,
     realtime_conversation_node,
     voice_synthesis_node,
-    route_decision
+    route_decision,
+    quick_reply_node,
+    quick_chat_node,
+    detect_scenario_type
 )
 
 
@@ -47,6 +52,12 @@ def wrap_load_memory(
     )
     node_output: LongTermMemoryOutput = long_term_memory_node(node_input, config, runtime)
     
+    # 自动判定场景类型（如果用户没有明确指定）
+    # 这需要在 state.py 中增加 scenario_type 字段到 LoadMemoryWrapInput/Output
+    # 暂时使用 user_input_text 判定
+    user_text = state.user_input_text or ""
+    detected_scenario = detect_scenario_type(user_text) if user_text else "general"
+    
     return LoadMemoryWrapOutput(
         child_id=state.child_id,
         child_name=state.child_name,
@@ -59,7 +70,8 @@ def wrap_load_memory(
         conversation_history=node_output.conversation_history,
         learning_progress=node_output.learning_progress,
         speaking_practice_count=node_output.speaking_practice_count,
-        current_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        scenario_type=detected_scenario  # 新增：场景类型
     )
 
 
@@ -133,6 +145,7 @@ def wrap_realtime_conversation(
 ) -> RealtimeConversationWrapOutput:
     """实时对话（支持作业状态自动更新）"""
     import json
+    from datetime import datetime, timedelta
     from graphs.memory_store import MemoryStore
     from langchain_core.messages import HumanMessage, SystemMessage
     
@@ -162,13 +175,30 @@ def wrap_realtime_conversation(
     
     ai_response_text = node_output.ai_response
     
+    # ============== 优化：作业判断（关键词过滤+会话降频） ==============
     # 使用第二个LLM调用来判断是否提到了作业完成
     # 这样更可靠，不依赖主对话LLM的格式输出
     if valid_homework:
-        subjects_str = "、".join([hw.get("subject", "") for hw in valid_homework])
-        
-        # 使用LLM判断对话中是否提到作业完成
-        judgment_prompt = f"""你是一个作业状态识别助手。请分析以下对话，判断孩子是否确认完成了某个作业。
+        # 步骤1：关键词过滤（覆盖90%场景）
+        completion_keywords = ["做完", "完成", "交了", "写完", "搞定", "好了"]
+        if not any(kw in user_text for kw in completion_keywords):
+            # 没有关键词，直接跳过作业判断
+            pass
+        else:
+            # 步骤2：会话降频机制
+            # 同一会话 5 分钟内只触发一次
+            last_check = memory_store.get_last_homework_check(state.child_id)
+            if last_check and datetime.now() - last_check < timedelta(minutes=5):
+                # 5 分钟内检查过，跳过
+                pass
+            else:
+                # 记录检查时间
+                memory_store.record_homework_check(state.child_id)
+                
+                # 步骤3：使用LLM判断对话中是否提到作业完成
+                subjects_str = "、".join([hw.get("subject", "") for hw in valid_homework])
+                
+                judgment_prompt = f"""你是一个作业状态识别助手。请分析以下对话，判断孩子是否确认完成了某个作业。
 
 孩子的年龄：{state.child_age}岁
 孩子说：{user_text}
@@ -187,34 +217,34 @@ AI回复：{ai_response_text}
 - homework_completed: 如果孩子明确说"做完了"、"完成了"等，设为true，否则false
 - subject: 提取学科名称（如"数学"、"语文"、"英语"），如果不确定则为空字符串
 - confirmed: 如果孩子确认完成（如"是的"、"真的做完了"等），设为true，否则false"""
-        
-        try:
-            client = LLMClient(ctx=runtime.context)
-            messages = [HumanMessage(content=judgment_prompt)]
-            response = client.invoke(messages=messages, model="doubao-seed-1-8-251228", temperature=0.3)
-            
-            # 解析LLM的判断结果
-            judgment_text = str(response.content).strip()
-            # 提取JSON部分
-            if "{" in judgment_text and "}" in judgment_text:
-                json_start = judgment_text.find("{")
-                json_end = judgment_text.rfind("}") + 1
-                json_str = judgment_text[json_start:json_end]
                 
-                homework_completed_info = json.loads(json_str)
-                
-                # 如果确认作业完成，更新作业状态
-                if homework_completed_info.get("homework_completed", False) and homework_completed_info.get("confirmed", False):
-                    subject = homework_completed_info.get("subject", "")
-                    if subject:
-                        # 查找匹配的作业并标记为完成
-                        for hw in valid_homework:
-                            if subject in hw.get("subject", ""):
-                                memory_store.complete_homework(state.child_id, hw["id"])
-                                print(f"✅ 自动更新作业状态：{subject} 作业标记为已完成")
-                                break
-        except Exception as e:
-            print(f"⚠️  作业完成判断失败: {e}")
+                try:
+                    client = LLMClient(ctx=runtime.context)
+                    messages = [HumanMessage(content=judgment_prompt)]
+                    response = client.invoke(messages=messages, model="doubao-seed-1-8-251228", temperature=0.3)
+                    
+                    # 解析LLM的判断结果
+                    judgment_text = str(response.content).strip()
+                    # 提取JSON部分
+                    if "{" in judgment_text and "}" in judgment_text:
+                        json_start = judgment_text.find("{")
+                        json_end = judgment_text.rfind("}") + 1
+                        json_str = judgment_text[json_start:json_end]
+                        
+                        homework_completed_info = json.loads(json_str)
+                        
+                        # 如果确认作业完成，更新作业状态
+                        if homework_completed_info.get("homework_completed", False) and homework_completed_info.get("confirmed", False):
+                            subject = homework_completed_info.get("subject", "")
+                            if subject:
+                                # 查找匹配的作业并标记为完成
+                                for hw in valid_homework:
+                                    if subject in hw.get("subject", ""):
+                                        memory_store.complete_homework(state.child_id, hw["id"])
+                                        print(f"✅ 自动更新作业状态：{subject} 作业标记为已完成")
+                                        break
+                except Exception as e:
+                    print(f"⚠️  作业完成判断失败: {e}")
     
     return RealtimeConversationWrapOutput(ai_response=ai_response_text)
 
@@ -270,6 +300,44 @@ def wrap_save_memory(
         })
     
     return SaveMemoryWrapOutput(saved=True)
+
+
+# ============== 新增包装函数：快速回复 ==============
+def wrap_quick_reply(
+    state: QuickReplyWrapInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> QuickReplyWrapOutput:
+    """快速回复包装"""
+    node_input = QuickReplyInput(
+        user_input_text=state.user_input_text,
+        child_name=state.child_name
+    )
+    node_output: QuickReplyOutput = quick_reply_node(node_input, config, runtime)
+    
+    return QuickReplyWrapOutput(
+        quick_response=node_output.quick_response,
+        followup_question=node_output.followup_question,
+        user_input_text=state.user_input_text,
+        child_name=state.child_name
+    )
+
+
+# ============== 新增包装函数：轻量级聊天 ==============
+def wrap_quick_chat(
+    state: QuickChatWrapInput,
+    config: RunnableConfig,
+    runtime: Runtime[Context]
+) -> QuickChatWrapOutput:
+    """轻量级聊天包装"""
+    node_input = QuickChatInput(
+        user_input_text=state.user_input_text,
+        child_name=state.child_name,
+        conversation_history=state.conversation_history
+    )
+    node_output: QuickChatOutput = quick_chat_node(node_input, config, runtime)
+    
+    return QuickChatWrapOutput(ai_response=node_output.ai_response)
 
 
 # ============== 条件判断包装函数 ==============

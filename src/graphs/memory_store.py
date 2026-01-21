@@ -409,3 +409,19 @@ class MemoryStore:
         """清除孩子所有数据"""
         if child_id in self._data:
             del self._data[child_id]
+    
+    # ============== 作业检查时间记录（用于降频机制） ==============
+    
+    def record_homework_check(self, child_id: str) -> None:
+        """记录作业检查时间"""
+        child_data = self._get_child_data(child_id)
+        if "homework_checks" not in child_data:
+            child_data["homework_checks"] = {}
+        child_data["homework_checks"]["last_check"] = datetime.now()
+    
+    def get_last_homework_check(self, child_id: str) -> Optional[datetime]:
+        """获取最后作业检查时间"""
+        child_data = self._get_child_data(child_id)
+        if "homework_checks" in child_data and "last_check" in child_data["homework_checks"]:
+            return child_data["homework_checks"]["last_check"]
+        return None
